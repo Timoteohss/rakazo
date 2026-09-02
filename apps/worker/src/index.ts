@@ -4,11 +4,13 @@ import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 loadRootEnv();
 
 import {
-  ChatSdkMessagingSurface,
+  ChatSdkMessagingProvider,
+  chatSdkConfigFromEnv,
   createBackgroundJobHandlers,
   createConnectorStack,
   createJobReconciler,
-  createMessagingContextLoader,
+  createMessagingProvider,
+  createPhoneContextLoader,
   createPostgresReconciliationLeadership,
   createRunExecutor,
   createRunSandbox,
@@ -21,14 +23,11 @@ import {
   InMemoryJobQueue,
   InstalledConnectorProvider,
   isComposioEnabled,
-  isMessagingSurfaceEnabled,
   isPipedreamEnabled,
   LocalAgentHomeStore,
   LocalArtifactStore,
   McpConnector,
   McpOAuthBroker,
-  messagingEnvFromProcess,
-  messagingPlatformsFromEnv,
   PiAgentRuntime,
   PipedreamConnector,
   PostgresRealtimeFanout,
@@ -37,6 +36,7 @@ import {
   resolveSandboxProvider,
   ScriptedAgentRuntime,
   SpaceMemoryProviderResolver,
+  sendBlueConfigFromEnv,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey, resolveSupervisorToken } from "@rakazo/core";
 import { createDb, createThreadEvents } from "@rakazo/db";
@@ -95,13 +95,23 @@ async function main() {
   const pipedream = isPipedreamEnabled(pipedreamConfig)
     ? new PipedreamConnector(pipedreamConfig)
     : undefined;
-  const messagingPlatforms = messagingPlatformsFromEnv(messagingEnvFromProcess(process.env));
-  const messaging = isMessagingSurfaceEnabled(messagingPlatforms, {
+  const sendBlueConfig = sendBlueConfigFromEnv({
+    sendblueApiKeyId: process.env.SENDBLUE_API_KEY_ID,
+    sendblueApiSecret: process.env.SENDBLUE_API_SECRET,
+    sendblueSigningSecret: process.env.SENDBLUE_SIGNING_SECRET,
+    sendbluePhoneNumber: process.env.SENDBLUE_PHONE_NUMBER,
+  });
+  const messaging = createMessagingProvider({
+    provider: process.env.MESSAGING_PROVIDER,
     deploymentModelKey,
-    openSignup: process.env.MESSAGING_OPEN_SIGNUP === "true",
-  })
-    ? new ChatSdkMessagingSurface(messagingPlatforms)
-    : undefined;
+    sendBlueConfig,
+    chatSdkConfig: chatSdkConfigFromEnv({
+      messagingChatSdkAdapter: process.env.MESSAGING_CHATSDK_ADAPTER,
+    }),
+  });
+  if (messaging instanceof ChatSdkMessagingProvider) {
+    await messaging.initialize();
+  }
   const stack = createConnectorStack(isComposioEnabled(process.env.COMPOSIO_API_KEY), undefined, [
     new InstalledConnectorProvider(prisma, secrets),
     ...(pipedream ? [pipedream] : []),
@@ -133,7 +143,7 @@ async function main() {
     notifications: new ExpoPushProvider(dataDir),
     jobs,
     events,
-    messaging: messaging ? createMessagingContextLoader(prisma) : undefined,
+    phone: messaging ? createPhoneContextLoader(prisma) : undefined,
     web: createWebProvider(),
   });
 

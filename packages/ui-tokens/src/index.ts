@@ -14,9 +14,7 @@ export const tokens = {
   cream: "#F1F1EF",
   creamInk: "#1A1A1A",
   accent: "#3EC5A8",
-  danger: "#EF4444",
-  dangerStrong: "#DC2626",
-  dangerSoft: "#FCA5A5",
+  danger: "#E65707",
   success: "#30A24B",
   successSoft: "#4ECB71",
 } as const;

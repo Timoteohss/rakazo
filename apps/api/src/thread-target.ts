@@ -139,35 +139,8 @@ async function replayExistingSend(
 ) {
   if (!clientNonce) return null;
   const message = await findSendReceipt(deps.prisma, threadId, clientNonce);
-  if (!message) return null;
-  const receiptEvent = await deps.prisma.event.findFirst({
-    where: {
-      threadId,
-      type: "thread.message.created",
-      payload: { path: ["messageId"], equals: message.id },
-    },
-    orderBy: { seq: "desc" },
-    select: { payload: true },
-  });
-  const receiptRunIds = sendEventRunIds(receiptEvent?.payload);
-  const receiptRuns = receiptRunIds.length
-    ? await deps.prisma.run.findMany({ where: { id: { in: receiptRunIds } } })
-    : [];
-  const receiptRunById = new Map(receiptRuns.map((run) => [run.id, run]));
-  const orderedReceiptRuns = receiptRunIds.flatMap((id) => {
-    const run = receiptRunById.get(id);
-    return run ? [run] : [];
-  });
-  const linkedRun =
-    message.sourceRuns[0] ??
-    (message.runId ? await deps.prisma.run.findUnique({ where: { id: message.runId } }) : null);
-  if (!linkedRun && orderedReceiptRuns.length === 0) return null;
-  const runs = orderedReceiptRuns.length
-    ? orderedReceiptRuns
-    : message.sourceRuns.length
-      ? message.sourceRuns
-      : [linkedRun!];
-  await enqueueRunsNeedingContinue(deps.jobs, runs);
+  if (!message || message.sourceRuns.length === 0) return null;
+  await enqueueRunsNeedingContinue(deps.jobs, message.sourceRuns);
   const latestEvent = await deps.prisma.event.findFirst({
     where: { threadId },
     orderBy: { seq: "desc" },
@@ -179,13 +152,7 @@ async function replayExistingSend(
       console.error("thread send realtime notification", error);
     });
   }
-  return sendResult(message, runs);
-}
-
-function sendEventRunIds(payload: Prisma.JsonValue | undefined): string[] {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
-  const runIds = (payload as { runIds?: unknown }).runIds;
-  return Array.isArray(runIds) ? runIds.filter((id): id is string => typeof id === "string") : [];
+  return sendResult(message, message.sourceRuns);
 }
 
 function sendResult(message: { seq: number }, runs: Array<{ id: string; taskId: string }>) {
@@ -333,44 +300,21 @@ export async function threadSnapshot(
               trigger: { not: "bot_message" },
               status: { in: [...ACTIVE_RUN_STATUSES, "failed"] },
             },
-            // The id tiebreak keeps ordering deterministic under equal
-            // timestamps, matching the supersession probe below.
-            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            orderBy: { createdAt: "desc" },
           }),
         ]);
-        // A failed run is only the thread's word while it is still the newest
-        // terminal run; otherwise a stale failure would resurface in the
-        // composer error strip on every load, forever. Instead of comparing
-        // timestamps (equal createdAt values reverse under gt/gte), ask for
-        // the newest terminal run under the same deterministic ordering and
-        // check whether it is this failure.
-        const newestTerminal =
-          run?.status === "failed"
-            ? await tx.run.findFirst({
-                where: {
-                  botId: target.botId,
-                  threadId: target.threadId,
-                  // Match the selection query — peer bot_message runs must not bury a user-visible failure.
-                  trigger: { not: "bot_message" },
-                  status: { in: ["failed", "completed", "cancelled"] },
-                },
-                orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-                select: { id: true },
-              })
-            : null;
-        const currentRun = run?.status === "failed" && newestTerminal?.id !== run.id ? null : run;
         const liveEvents =
-          currentRun && isActive(currentRun.status as RunStatus)
+          run && isActive(run.status as RunStatus)
             ? await tx.event.findMany({
                 where: {
                   threadId: target.threadId,
-                  runId: currentRun.id,
+                  runId: run.id,
                   type: { in: ["thread.progress", "thread.subagent", "agent.tool.called"] },
                 },
                 orderBy: { seq: "asc" },
               })
             : [];
-        return { messagePage, last, run: currentRun, liveEvents };
+        return { messagePage, last, run, liveEvents };
       }),
     ]);
     return {
@@ -572,39 +516,6 @@ export async function sendThreadMessage(
           replyToMessageId: input.replyToMessageId,
           clientNonce: input.clientNonce,
         });
-        const active = await tx.run.findFirst({
-          where: {
-            threadId: target.threadId,
-            botId: target.botId,
-            status: { in: [...ACTIVE_RUN_STATUSES] },
-          },
-          select: { id: true, taskId: true, status: true },
-        });
-        if (active) {
-          await tx.steeringMessage.create({
-            data: {
-              messageId: message.id,
-              botId: target.botId,
-              userId: actor.userId,
-              runId: active.id,
-            },
-          });
-          await tx.message.update({ where: { id: message.id }, data: { runId: active.id } });
-          const event = await appendEventInTransaction(tx, {
-            spaceId: actor.spaceId,
-            threadId: target.threadId,
-            botId: target.botId,
-            type: "thread.message.created",
-            runId: active.id,
-            payload: {
-              messageId: message.id,
-              role: "user",
-              blocks,
-              replyToMessageId: input.replyToMessageId,
-            },
-          });
-          return { message, runs: [active], eventSeq: event.seq };
-        }
         const task = await tx.task.create({
           data: {
             spaceId: actor.spaceId,
@@ -644,7 +555,6 @@ export async function sendThreadMessage(
             messageId: message.id,
             role: "user",
             blocks,
-            runIds: [run.id],
             replyToMessageId: input.replyToMessageId,
           },
         });
@@ -679,25 +589,8 @@ export async function sendThreadMessage(
         replyToMessageId: input.replyToMessageId,
         clientNonce: input.clientNonce,
       });
-      const activeRuns = await tx.run.findMany({
-        where: {
-          threadId: target.threadId,
-          botId: { in: targetBotIds },
-          status: { in: [...ACTIVE_RUN_STATUSES] },
-        },
-        select: { id: true, taskId: true, botId: true, status: true },
-      });
-      const activeByBotId = new Map(activeRuns.map((run) => [run.botId, run]));
       const runs: Array<{ id: string; taskId: string; botId: string; status: string }> = [];
       for (const botId of targetBotIds) {
-        const active = activeByBotId.get(botId);
-        if (active) {
-          await tx.steeringMessage.create({
-            data: { messageId: message.id, botId, userId: actor.userId, runId: active.id },
-          });
-          runs.push(active);
-          continue;
-        }
         const task = await tx.task.create({
           data: {
             spaceId: actor.spaceId,
@@ -724,31 +617,24 @@ export async function sendThreadMessage(
         runs.push(run);
       }
       const firstRun = runs[0];
-      const eventBotId = firstRun?.botId ?? targetBotIds[0];
-      if (!eventBotId) throw new IsolationError("Group send did not resolve a target");
-      if (firstRun) {
-        await tx.message.update({ where: { id: message.id }, data: { runId: firstRun.id } });
-        const createdRuns = runs.filter((run) => !activeByBotId.has(run.botId));
-        if (createdRuns.length) {
-          await cancelSupersededQueuedRuns(tx, {
-            threadId: target.threadId,
-            botIds: createdRuns.map((run) => run.botId),
-            keepRunIds: createdRuns.map((run) => run.id),
-          });
-        }
-      }
+      if (!firstRun) throw new IsolationError("Group send did not resolve a target");
+      await tx.message.update({ where: { id: message.id }, data: { runId: firstRun.id } });
+      await cancelSupersededQueuedRuns(tx, {
+        threadId: target.threadId,
+        botIds: targetBotIds,
+        keepRunIds: runs.map((run) => run.id),
+      });
       await touchGroupUpdatedAt(tx, target.groupId);
       const event = await appendEventInTransaction(tx, {
         spaceId: actor.spaceId,
         threadId: target.threadId,
-        botId: eventBotId,
+        botId: firstRun.botId,
         type: "thread.message.created",
-        runId: firstRun?.id ?? activeRuns[0]?.id,
+        runId: firstRun.id,
         payload: {
           messageId: message.id,
           role: "user",
           blocks,
-          runIds: runs.map((run) => run.id),
           replyToMessageId: input.replyToMessageId,
         },
       });
@@ -842,28 +728,18 @@ export async function stopThreadRuns(
   actor: Actor,
   target: ThreadTarget,
 ) {
-  const runIds = await deps.prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM threads WHERE id = ${target.threadId} FOR UPDATE`;
-    const ids = (
-      await tx.run.findMany({
-        where: {
-          threadId: target.threadId,
-          status: { in: [...ACTIVE_RUN_STATUSES] },
-        },
-        select: { id: true },
-      })
-    ).map((run) => run.id);
-    await tx.run.updateMany({
-      where: { id: { in: ids }, status: { in: [...ACTIVE_RUN_STATUSES] } },
-      data: { status: "cancelled", completedAt: new Date() },
-    });
-    await tx.steeringMessage.deleteMany({
+  const runIds = (
+    await deps.prisma.run.findMany({
       where: {
-        botId: { in: target.kind === "bot" ? [target.botId] : target.memberBotIds },
-        message: { threadId: target.threadId },
+        threadId: target.threadId,
+        status: { in: [...ACTIVE_RUN_STATUSES] },
       },
-    });
-    return ids;
+      select: { id: true },
+    })
+  ).map((run) => run.id);
+  await deps.prisma.run.updateMany({
+    where: { id: { in: runIds } },
+    data: { status: "cancelled", completedAt: new Date() },
   });
   const computers = runIds.length
     ? await deps.prisma.computer.findMany({

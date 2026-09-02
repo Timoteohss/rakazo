@@ -33,14 +33,13 @@ import {
   MemoryDocumentSchema,
   MemoryScopeSchema,
   MeSchema,
-  MessagingAgentConnectionSchema,
-  MessagingChannelMembershipSchema,
-  MessagingLinkedIdentitySchema,
-  MessagingStatusSchema,
   ModelCatalogEntrySchema,
   ModelConnectInputSchema,
   ModelCredentialSchema,
   ModelOAuthBeginSchema,
+  PhoneAgentConnectionSchema,
+  PhoneChannelMembershipSchema,
+  PhoneStatusSchema,
   ReorderBotsInput,
   RoutineSchema,
   ScratchpadItemSchema,
@@ -557,35 +556,21 @@ export const appContract = {
       .output(ConnectionSchema),
     revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
   },
-  /** External messaging surface: link state, group channels, agent connections. */
-  messaging: {
-    status: oc.output(MessagingStatusSchema),
-    link: {
-      /** Issue a short-lived code the user sends to the line from a chat app. */
-      start: oc
-        .input(z.object({ botId: Id }))
-        .output(z.object({ code: z.string(), expiresAt: z.string() })),
-    },
-    identities: {
-      setBot: oc
-        .input(z.object({ identityId: Id, botId: Id }))
-        .output(MessagingLinkedIdentitySchema),
-      unlink: oc.input(z.object({ identityId: Id })).output(z.object({ ok: z.literal(true) })),
-    },
+  /** Phone messaging surface: link state, iMessage channels, agent connections. */
+  phone: {
+    status: oc.output(PhoneStatusSchema),
     channels: {
-      list: oc.output(z.array(MessagingChannelMembershipSchema)),
-      // Addressed by membership, not channel: one user can have two linked
-      // chat apps in the same group, and each answers for its own agent.
+      list: oc.output(z.array(PhoneChannelMembershipSchema)),
       respond: oc
-        .input(z.object({ membershipId: Id, accept: z.boolean() }))
-        .output(MessagingChannelMembershipSchema),
-      leave: oc.input(z.object({ membershipId: Id })).output(z.object({ ok: z.literal(true) })),
+        .input(z.object({ channelId: Id, accept: z.boolean() }))
+        .output(PhoneChannelMembershipSchema),
+      leave: oc.input(z.object({ channelId: Id })).output(z.object({ ok: z.literal(true) })),
     },
     connections: {
-      list: oc.output(z.array(MessagingAgentConnectionSchema)),
+      list: oc.output(z.array(PhoneAgentConnectionSchema)),
       respond: oc
         .input(z.object({ connectionId: Id, accept: z.boolean() }))
-        .output(MessagingAgentConnectionSchema),
+        .output(PhoneAgentConnectionSchema),
       revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
     },
   },

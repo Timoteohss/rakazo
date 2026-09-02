@@ -20,20 +20,7 @@ import {
 } from "./index.js";
 
 describe("contracts", () => {
-  it("accepts optional persisted duration only on valid steps blocks", () => {
-    expect(
-      MessageBlock.parse({
-        kind: "steps",
-        steps: [{ label: "Run tests", count: 1 }],
-        durationMs: 103_000,
-      }),
-    ).toMatchObject({ durationMs: 103_000 });
-    expect(MessageBlock.safeParse({ kind: "steps", steps: [], durationMs: -1 }).success).toBe(
-      false,
-    );
-  });
-
-  it("limits reactions to persisted non-channel messages", () => {
+  it("limits reactions to persisted non-phone messages", () => {
     expect(
       canReactToThreadMessage({ id: "message-1", blocks: [{ kind: "text", text: "hi" }] }),
     ).toBe(true);
@@ -45,10 +32,9 @@ describe("contracts", () => {
         id: "message-2",
         blocks: [
           {
-            kind: "channel_message",
-            provider: "sendblue",
+            kind: "phone_channel_message",
             channelId: "channel-1",
-            fromAddress: "+15555550100",
+            fromNumber: "+15555550100",
             fromLabel: "Pat",
             text: "hi",
           },
@@ -274,5 +260,49 @@ describe("contracts", () => {
         data: rows.slice(0, 2_501),
       }).success,
     ).toBe(false);
+  });
+
+  it("parses and validates whatsapp_qr message blocks", () => {
+    expect(
+      MessageBlock.safeParse({
+        kind: "whatsapp_qr",
+        status: "pending",
+        qrDataUrl: "data:image/png;base64,abc",
+        expiresAt: "2026-08-31T00:00:00.000Z",
+      }).success,
+    ).toBe(true);
+    expect(
+      MessageBlock.safeParse({ kind: "whatsapp_qr", status: "connected" }).success,
+    ).toBe(true);
+    expect(
+      MessageBlock.safeParse({ kind: "whatsapp_qr", status: "expired" }).success,
+    ).toBe(true);
+    expect(
+      MessageBlock.safeParse({
+        kind: "whatsapp_qr",
+        status: "failed",
+        errorMessage: "pairing failed",
+      }).success,
+    ).toBe(true);
+    // Optional fields may be omitted
+    expect(MessageBlock.safeParse({ kind: "whatsapp_qr", status: "pending" }).success).toBe(
+      true,
+    );
+    // Infers discriminated kind
+    const parsed = MessageBlock.parse({ kind: "whatsapp_qr", status: "pending" });
+    expect(parsed.kind).toBe("whatsapp_qr");
+    if (parsed.kind === "whatsapp_qr") {
+      expect(parsed.status).toBe("pending");
+    }
+  });
+
+  it("rejects invalid whatsapp_qr message blocks", () => {
+    expect(MessageBlock.safeParse({ kind: "whatsapp_qr", status: "unknown" }).success).toBe(
+      false,
+    );
+    expect(MessageBlock.safeParse({ kind: "whatsapp_qr" } as unknown).success).toBe(false);
+    expect(MessageBlock.safeParse({ kind: "whatsapp_qr", status: "pending", qrDataUrl: 123 } as unknown).success).toBe(
+      false,
+    );
   });
 });

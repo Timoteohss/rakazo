@@ -16,9 +16,6 @@ import { ShellPage } from "./pages/Shell";
 const AuthPage = lazy(() =>
   import("./pages/Auth").then((module) => ({ default: module.AuthPage })),
 );
-const PasswordResetPage = lazy(() =>
-  import("./pages/Auth").then((module) => ({ default: module.PasswordResetPage })),
-);
 const OnboardingPage = lazy(() =>
   import("./pages/Onboarding").then((module) => ({ default: module.OnboardingPage })),
 );
@@ -69,13 +66,6 @@ export function App() {
             path="/sign-up"
             element={user ? <Navigate to="/onboarding" replace /> : <AuthPage key="up" mode="up" />}
           />
-          <Route
-            path="/forgot-password"
-            element={
-              user ? <Navigate to="/app" replace /> : <AuthPage key="forgot" mode="forgot" />
-            }
-          />
-          <Route path="/reset-password" element={<PasswordResetPage />} />
           <Route
             path="/onboarding"
             element={user ? <OnboardingPage /> : <Navigate to="/sign-in" replace />}

@@ -14,7 +14,6 @@ import type {
   AgentRunRequest,
   AgentRuntime,
   AgentRuntimeEvent,
-  AgentSteeringMessage,
   AgentToolExecutionResult,
   ConnectorTool,
 } from "@rakazo/adapter-kit";
@@ -145,43 +144,13 @@ export class PiAgentRuntime implements AgentRuntime {
           pausePending: false,
         };
         const tools = toAgentTools(toolDefs, host);
-        const seenSteeringIds: string[] = [];
-        const initialSteering = request.claimSteering ? await request.claimSteering([]) : [];
-        seenSteeringIds.push(...initialSteering.map((item) => item.id));
-        const history = toHistory(
-          withoutSteeringMessages(request.history, initialSteering),
-          request.prompt,
-          request.sourceMessageId,
-        );
-        const initialPrompt = initialSteering.length
-          ? `${request.prompt}\n\nAdditional user context:\n${initialSteering
-              .map((item) => item.text)
-              .join("\n")}`
-          : request.prompt;
+        const history = toHistory(request.history, request.prompt);
 
-        let agent: Agent;
-        agent = new Agent({
-          sessionId: `${request.threadId}:${request.botId}`,
-          steeringMode: "all",
+        const agent = new Agent({
           streamFn: (m, ctx, options) =>
             models.streamSimple(m, ctx, reliableStreamOptions(m, options)),
           getApiKey: async () => apiKey,
           transformContext: async (messages) => pruneComputerScreenshotContext(messages),
-          prepareNextTurnWithContext: async () => {
-            if (!request.claimSteering) return undefined;
-            const steering = await request.claimSteering([...seenSteeringIds]);
-            if (steering.length === 0) return undefined;
-            seenSteeringIds.push(...steering.map((item) => item.id));
-            for (const item of steering) {
-              const images = toPiImages(item.images);
-              agent.steer({
-                role: "user",
-                content: images.length ? [{ type: "text", text: item.text }, ...images] : item.text,
-                timestamp: Date.now(),
-              });
-            }
-            return undefined;
-          },
           initialState: {
             systemPrompt:
               request.instructions ||
@@ -256,12 +225,13 @@ export class PiAgentRuntime implements AgentRuntime {
 
         // No "working…" progress push here: the shell already renders its own
         // placeholder while a run is active, and emitting one here shows two.
-        const images = toPiImages([
-          ...(request.currentTurnImages ?? []),
-          ...initialSteering.flatMap((item) => item.images ?? []),
-        ]);
+        const images = request.currentTurnImages?.map((image) => ({
+          type: "image" as const,
+          data: Buffer.from(image.data).toString("base64"),
+          mimeType: image.mimeType,
+        }));
         try {
-          await agent.prompt(initialPrompt, images?.length ? images : undefined);
+          await agent.prompt(request.prompt, images?.length ? images : undefined);
           await agent.waitForIdle();
         } finally {
           signal.removeEventListener("abort", onAbort);
@@ -313,14 +283,6 @@ export class PiAgentRuntime implements AgentRuntime {
       running.delete(request.runId);
     }
   }
-}
-
-function toPiImages(images: AgentRunRequest["currentTurnImages"]) {
-  return (images ?? []).map((image) => ({
-    type: "image" as const,
-    data: Buffer.from(image.data).toString("base64"),
-    mimeType: image.mimeType,
-  }));
 }
 
 function configuredOpenRouterModel(id: string): Model<"openai-completions"> {
@@ -481,26 +443,9 @@ function stableToolNameHash(name: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function toHistory(
-  history: AgentRunRequest["history"],
-  prompt: string,
-  sourceMessageId?: string | null,
-) {
-  let duplicatePromptIndex = -1;
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const message = history[index];
-    if (
-      message?.role === "user" &&
-      (sourceMessageId ? message.id === sourceMessageId : message.content === prompt)
-    ) {
-      duplicatePromptIndex = index;
-      break;
-    }
-  }
-  const prior =
-    duplicatePromptIndex < 0
-      ? history
-      : history.filter((_, index) => index !== duplicatePromptIndex);
+function toHistory(history: AgentRunRequest["history"], prompt: string) {
+  const last = history.at(-1);
+  const prior = last?.role === "user" && last.content === prompt ? history.slice(0, -1) : history;
   return prior
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) =>
@@ -508,33 +453,6 @@ function toHistory(
         ? { role: "user" as const, content: `Assistant: ${m.content}`, timestamp: Date.now() }
         : { role: "user" as const, content: m.content, timestamp: Date.now() },
     );
-}
-
-function withoutSteeringMessages(
-  history: AgentRunRequest["history"],
-  steering: AgentSteeringMessage[],
-): AgentRunRequest["history"] {
-  if (steering.length === 0) return history;
-  const result = [...history];
-  let beforeIndex = result.length - 1;
-  for (let steeringIndex = steering.length - 1; steeringIndex >= 0; steeringIndex -= 1) {
-    const steeringMessage = steering[steeringIndex];
-    for (let index = beforeIndex; index >= 0; index -= 1) {
-      const message = result[index];
-      if (
-        message?.role !== "user" ||
-        (message.id
-          ? message.id !== steeringMessage?.messageId
-          : message.content !== (steeringMessage?.historyText ?? steeringMessage?.text))
-      ) {
-        continue;
-      }
-      result.splice(index, 1);
-      beforeIndex = index - 1;
-      break;
-    }
-  }
-  return result;
 }
 
 function toAgentTool(tool: ConnectorTool, host: ToolHost, exposedName: string): AgentTool {
@@ -557,15 +475,6 @@ function toAgentTool(tool: ConnectorTool, host: ToolHost, exposedName: string): 
       }
       if (tool.name === "request_takeover") {
         return { reason: String(raw.reason ?? "I need you on the screen.") };
-      }
-      if (tool.name === "ask_user") {
-        const options = Array.isArray(raw.options) ? raw.options.map(String) : raw.options;
-        return {
-          question: String(raw.question ?? "What should I use?"),
-          // Keep a missing/invalid options value as-is so schema minItems can reject it;
-          // do not coerce to [] (that used to look like a valid empty list upstream).
-          options,
-        };
       }
       if (tool.name === "request_secret") {
         return {
@@ -641,30 +550,6 @@ function toAgentTool(tool: ConnectorTool, host: ToolHost, exposedName: string): 
         });
         return {
           content: [{ type: "text", text: "Takeover requested." }],
-          details: args,
-          terminate: true,
-        };
-      }
-      if (tool.name === "ask_user") {
-        const options = Array.isArray(args.options)
-          ? args.options.map((option) => String(option).trim())
-          : [];
-        if (
-          options.length < 2 ||
-          options.length > 4 ||
-          options.some((option) => option.length === 0 || option.length > 80) ||
-          new Set(options).size !== options.length
-        ) {
-          throw new Error("ask_user requires two to four unique, non-empty options");
-        }
-        host.pausePending = true;
-        host.queue.push({
-          type: "ask",
-          text: String(args.question ?? "What should I use?"),
-          actions: options.map((label, index) => ({ id: `choice-${index + 1}`, label })),
-        });
-        return {
-          content: [{ type: "text", text: "Waiting for the user's choice." }],
           details: args,
           terminate: true,
         };
@@ -863,21 +748,6 @@ async function executeSubagent(host: ToolHost, executionId: string, args: Record
 }
 
 function parametersFor(tool: ConnectorTool) {
-  return builtinParameters(tool) ?? safeJsonSchemaParameters(tool);
-}
-
-/** A remote MCP server controls its own schemas, so a shape TypeBox cannot express must
- * degrade to a permissive object instead of failing every turn for the whole bot. */
-function safeJsonSchemaParameters(tool: ConnectorTool) {
-  try {
-    return jsonSchemaParameters(tool.inputSchema);
-  } catch (error) {
-    console.error(`unsupported input schema for tool ${tool.name}`, error);
-    return Type.Object({});
-  }
-}
-
-function builtinParameters(tool: ConnectorTool) {
   if (tool.name === "write_file") {
     return Type.Object({ path: Type.String(), content: Type.String() });
   }
@@ -896,16 +766,6 @@ function builtinParameters(tool: ConnectorTool) {
       label: Type.String(),
       purpose: Type.Union([Type.Literal("otp"), Type.Literal("password"), Type.Literal("api_key")]),
       connectionId: Type.Optional(Type.String()),
-    });
-  }
-  if (tool.name === "ask_user") {
-    return Type.Object({
-      question: Type.String({ maxLength: 240 }),
-      options: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
-        minItems: 2,
-        maxItems: 4,
-        uniqueItems: true,
-      }),
     });
   }
   if (tool.name === "remember") {
@@ -941,7 +801,7 @@ function builtinParameters(tool: ConnectorTool) {
       bot_id: Type.Optional(Type.String()),
     });
   }
-  return undefined;
+  return jsonSchemaParameters(tool.inputSchema);
 }
 
 /** Keep recent visual state without repeatedly resending every earlier full screenshot. */
@@ -1004,7 +864,7 @@ function isAgentToolExecutionResult(result: unknown): result is AgentToolExecuti
   );
 }
 
-export function jsonSchemaParameters(schema: Record<string, unknown>) {
+function jsonSchemaParameters(schema: Record<string, unknown>) {
   const properties = (schema.properties ?? {}) as Record<string, unknown>;
   const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
   const fields: Record<string, ReturnType<typeof Type.Optional>> = {};
@@ -1017,39 +877,15 @@ export function jsonSchemaParameters(schema: Record<string, unknown>) {
   return Type.Object(fields);
 }
 
-/** TypeBox only builds literals from primitives; anything else throws while the tool list is
- * being assembled, which would take down the whole turn. */
-function enumUnion(values: readonly unknown[]) {
-  const members = values.map((value) =>
-    value === null
-      ? Type.Null()
-      : typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-        ? Type.Literal(value)
-        : undefined,
-  );
-  return members.every((member) => member !== undefined) ? Type.Union(members) : undefined;
-}
-
 function jsonField(spec: unknown): ReturnType<typeof Type.String> {
   const definition = spec && typeof spec === "object" ? (spec as Record<string, unknown>) : {};
   if (Array.isArray(definition.enum) && definition.enum.length > 0) {
-    const union = enumUnion(definition.enum);
-    if (union) return union as never;
+    return Type.Union(definition.enum.map((value) => Type.Literal(value))) as never;
   }
   const type = "type" in definition ? String(definition.type) : "string";
   if (type === "number" || type === "integer") return Type.Number() as never;
   if (type === "boolean") return Type.Boolean() as never;
-  if (type === "array") {
-    const options: {
-      minItems?: number;
-      maxItems?: number;
-      uniqueItems?: boolean;
-    } = {};
-    if (typeof definition.minItems === "number") options.minItems = definition.minItems;
-    if (typeof definition.maxItems === "number") options.maxItems = definition.maxItems;
-    if (definition.uniqueItems === true) options.uniqueItems = true;
-    return Type.Array(jsonField(definition.items), options) as never;
-  }
+  if (type === "array") return Type.Array(jsonField(definition.items)) as never;
   if (type === "object") return jsonSchemaParameters(definition) as never;
   return Type.String();
 }
