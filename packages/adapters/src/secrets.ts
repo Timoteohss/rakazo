@@ -44,6 +44,16 @@ export class EncryptedSecretStore implements SecretStore {
     return `${VERSION_PREFIX}${Buffer.concat([salt, iv, tag, enc]).toString("base64")}`;
   }
 
+  /** Synchronous encrypt for internal use (e.g. Baileys auth state). */
+  encrypt(plaintext: string, recordId: string): string {
+    return this.seal(plaintext, recordId);
+  }
+
+  /** Synchronous decrypt for internal use (e.g. Baileys auth state). */
+  decrypt(ciphertext: string, recordId: string): string {
+    return this.load(ciphertext, recordId);
+  }
+
   async get(id: string, _context: AdapterContext): Promise<string> {
     throw new Error(`SecretStore.get requires persistence; use load(${id})`);
   }

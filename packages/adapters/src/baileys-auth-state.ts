@@ -6,6 +6,7 @@ import type {
   SignalKeyStore,
 } from "baileys";
 import { BufferJSON, initAuthCreds, makeCacheableSignalKeyStore } from "baileys";
+import { EncryptedSecretStore } from "./secrets.js";
 
 // Re-export for callers that need the type.
 export type { AuthenticationCreds, AuthenticationState, SignalDataSet, SignalKeyStore };
@@ -14,6 +15,11 @@ export interface BaileysAuthState {
   state: AuthenticationState;
   saveCreds: () => Promise<void>;
   destroy: () => Promise<void>;
+}
+
+export interface BaileysAuthStateOptions {
+  encryptionKey?: string;
+  secrets?: EncryptedSecretStore;
 }
 
 type PrismaLike = {
@@ -35,21 +41,16 @@ type Row = {
 
 const FLUSH_DEBOUNCE_MS = 40;
 
-function serialize(obj: unknown): unknown {
-  return JSON.parse(
-    JSON.stringify(obj, BufferJSON.replacer as unknown as (k: string, v: unknown) => unknown),
-  );
-}
-
-function deserialize(stored: unknown): unknown {
-  if (stored == null) return null;
-  if (typeof stored === "string") {
-    return JSON.parse(stored, BufferJSON.reviver as unknown as (k: string, v: unknown) => unknown);
+function resolveSecrets(optsOrKey?: string | BaileysAuthStateOptions): EncryptedSecretStore {
+  if (optsOrKey && typeof optsOrKey === "object" && "secrets" in optsOrKey && optsOrKey.secrets) {
+    return optsOrKey.secrets;
   }
-  return JSON.parse(
-    JSON.stringify(stored),
-    BufferJSON.reviver as unknown as (k: string, v: unknown) => unknown,
-  );
+  const keyFromOpts =
+    typeof optsOrKey === "string"
+      ? optsOrKey
+      : (optsOrKey as BaileysAuthStateOptions | undefined)?.encryptionKey;
+  const key = keyFromOpts ?? process.env.ENCRYPTION_KEY ?? "dev-encryption-key";
+  return new EncryptedSecretStore(key);
 }
 
 async function loadRow(prisma: PrismaLike, scope: string): Promise<Row | null> {
@@ -117,10 +118,11 @@ async function ensureRow(prisma: PrismaLike, scope: string): Promise<Row> {
  *
  * Each `scope` maps to one `messaging_baileys_sessions` row (`scope` unique,
  * default for now). Creds and keys are serialized with Baileys' BufferJSON
- * codec into the jsonb columns. The signal key store is wrapped with
- * `makeCacheableSignalKeyStore` for in-memory cache + write-through semantics;
- * writes are debounced and coalesced, with an explicit `destroy()` flush hook
- * for disconnect / shutdown callers.
+ * codec, then encrypted with EncryptedSecretStore (AES-256-GCM, scrypt,
+ * versioned `v2:` format) before being written to the jsonb columns. The
+ * signal key store is wrapped with `makeCacheableSignalKeyStore` for in-memory
+ * cache + write-through semantics; writes are debounced and coalesced, with an
+ * explicit `destroy()` flush hook for disconnect / shutdown callers.
  *
  * The returned `state.creds` object is the live mutable reference Baileys
  * mutates; call `saveCreds()` after Baileys signals creds have changed.
@@ -128,23 +130,70 @@ async function ensureRow(prisma: PrismaLike, scope: string): Promise<Row> {
 export async function createPostgresAuthState(
   prisma: PrismaLike,
   sessionId = "default",
+  optsOrKey?: string | BaileysAuthStateOptions,
 ): Promise<BaileysAuthState> {
   const scope = sessionId || "default";
+  const secrets = resolveSecrets(optsOrKey);
+  const credsRecordId = `baileys:${scope}:creds`;
+  const keysRecordId = `baileys:${scope}:keys`;
+
+  function encryptValue(obj: unknown, recordId: string): string {
+    const plaintext = JSON.stringify(
+      obj,
+      BufferJSON.replacer as unknown as (k: string, v: unknown) => unknown,
+    );
+    return secrets.encrypt(plaintext, recordId);
+  }
+
+  function decryptValue(stored: unknown, recordId: string): unknown {
+    if (stored == null) return null;
+    if (typeof stored === "string") {
+      // Ciphertext from EncryptedSecretStore always starts with v2:, but also
+      // handle legacy base64 without prefix.
+      const maybeCipher = stored.trim();
+      if (maybeCipher.startsWith("v2:") || /^[A-Za-z0-9+/=]+$/.test(maybeCipher)) {
+        try {
+          const plain = secrets.load(maybeCipher, recordId);
+          return JSON.parse(
+            plain,
+            BufferJSON.reviver as unknown as (k: string, v: unknown) => unknown,
+          );
+        } catch {
+          // Not actually ciphertext — fall through to plain JSON parse below
+        }
+      }
+      try {
+        return JSON.parse(
+          stored,
+          BufferJSON.reviver as unknown as (k: string, v: unknown) => unknown,
+        );
+      } catch {
+        return null;
+      }
+    }
+    // Legacy plaintext JSONB object (pre-encryption rows)
+    return JSON.parse(
+      JSON.stringify(stored),
+      BufferJSON.reviver as unknown as (k: string, v: unknown) => unknown,
+    );
+  }
+
   const row = await ensureRow(prisma, scope);
 
   let creds: AuthenticationCreds;
   const rawCreds = row.creds;
-  if (rawCreds != null) {
-    creds = deserialize(rawCreds) as AuthenticationCreds;
+  const decryptedCreds = decryptValue(rawCreds, credsRecordId);
+  if (decryptedCreds != null) {
+    creds = decryptedCreds as AuthenticationCreds;
   } else {
     creds = initAuthCreds();
   }
 
   let keysData: SignalDataSet = {};
   const rawKeys = row.keys;
-  if (rawKeys != null) {
-    const parsed = deserialize(rawKeys) as SignalDataSet;
-    if (parsed && typeof parsed === "object") keysData = parsed as SignalDataSet;
+  const decryptedKeys = decryptValue(rawKeys, keysRecordId);
+  if (decryptedKeys != null && typeof decryptedKeys === "object") {
+    keysData = decryptedKeys as SignalDataSet;
   }
 
   const mutex = new Mutex();
@@ -164,7 +213,7 @@ export async function createPostgresAuthState(
       pendingTimer = null;
     }
     await mutex.runExclusive(async () => {
-      const payload = serialize(keysData);
+      const payload = encryptValue(keysData, keysRecordId);
       const upd = delegate.update;
       if (!upd) throw new Error("prisma delegate missing update");
       try {
@@ -234,7 +283,7 @@ export async function createPostgresAuthState(
 
   async function saveCreds(): Promise<void> {
     await mutex.runExclusive(async () => {
-      const payload = serialize(state.creds);
+      const payload = encryptValue(state.creds, credsRecordId);
       const upd = delegate.update;
       if (!upd) throw new Error("prisma delegate missing update");
       try {
@@ -252,7 +301,7 @@ export async function createPostgresAuthState(
       pendingTimer = null;
     }
     await mutex.runExclusive(async () => {
-      const payload = serialize(keysData);
+      const payload = encryptValue(keysData, keysRecordId);
       const upd = delegate.update;
       if (!upd) return;
       try {
