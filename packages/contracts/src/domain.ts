@@ -610,40 +610,23 @@ export type ComputerStatus = z.infer<typeof ComputerStatusSchema>;
 export const ComputerReleaseReasonSchema = z.enum(["done", "skipped"]);
 export type ComputerReleaseReason = z.infer<typeof ComputerReleaseReasonSchema>;
 
-export const MessagingLinkedIdentitySchema = z.object({
-  id: Id,
-  provider: z.string(),
-  address: z.string(),
-  botId: Id,
-  botName: z.string(),
-});
-export type MessagingLinkedIdentity = z.infer<typeof MessagingLinkedIdentitySchema>;
-
-export const MessagingStatusSchema = z.object({
+export const PhoneStatusSchema = z.object({
   enabled: z.boolean(),
-  /** Messaging platforms mounted on this deployment (sendblue, slack, …). */
-  providers: z.array(z.string()),
-  /** True when unknown senders auto-provision their own accounts. */
-  openSignup: z.boolean(),
-  /** The caller's linked chat apps, one entry per (provider, address). */
-  identities: z.array(MessagingLinkedIdentitySchema),
+  linked: z.boolean(),
+  phoneE164: z.string().nullable(),
+  botId: Id.nullable(),
 });
-export type MessagingStatus = z.infer<typeof MessagingStatusSchema>;
+export type PhoneStatus = z.infer<typeof PhoneStatusSchema>;
 
-export const MessagingChannelMembershipSchema = z.object({
-  /** One row per linked identity: the same group can hold two of the caller's. */
-  id: Id,
+export const PhoneChannelMembershipSchema = z.object({
   channelId: Id,
-  /** Which of the caller's linked chat apps this membership belongs to. */
-  identityId: Id,
-  provider: z.string(),
   name: z.string().nullable(),
   status: z.enum(["invited", "approved", "declined", "left"]),
   memberCount: z.number().int().nonnegative(),
 });
-export type MessagingChannelMembership = z.infer<typeof MessagingChannelMembershipSchema>;
+export type PhoneChannelMembership = z.infer<typeof PhoneChannelMembershipSchema>;
 
-export const MessagingAgentConnectionSchema = z.object({
+export const PhoneAgentConnectionSchema = z.object({
   id: Id,
   peerBotName: z.string(),
   peerOwnerLabel: z.string(),
@@ -651,7 +634,7 @@ export const MessagingAgentConnectionSchema = z.object({
   /** true when the caller's bot is the target (only the target can respond). */
   incoming: z.boolean(),
 });
-export type MessagingAgentConnection = z.infer<typeof MessagingAgentConnectionSchema>;
+export type PhoneAgentConnection = z.infer<typeof PhoneAgentConnectionSchema>;
 
 export const RunSchema = z.object({
   id: Id,
@@ -669,7 +652,7 @@ export const RunSchema = z.object({
     "skill",
     "bot_message",
     "webhook",
-    "messaging",
+    "phone",
   ]),
   routineId: Id.nullable(),
   modelProvider: z.string().nullable(),

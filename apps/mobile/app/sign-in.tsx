@@ -21,10 +21,7 @@ import {
   displayApiHost,
   loadSessionToken,
   normalizeApiBase,
-  type PasswordResetCapabilities,
-  passwordResetCapabilities,
   probeApiBase,
-  requestPasswordReset,
   resetApiBase,
   saveApiBase,
   signIn,
@@ -34,7 +31,7 @@ import {
 
 export default function SignIn() {
   const router = useRouter();
-  const [mode, setMode] = useState<"in" | "up" | "forgot">("in");
+  const [mode, setMode] = useState<"in" | "up">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,8 +41,6 @@ export default function SignIn() {
   const [hasSession, setHasSession] = useState(false);
   const [apiBase, setApiBase] = useState(() => currentApiBase());
   const [serverOpen, setServerOpen] = useState(false);
-  const [reset, setReset] = useState<PasswordResetCapabilities | null>(null);
-  const [resetSent, setResetSent] = useState(false);
 
   useEffect(() => {
     void loadSessionToken().then((token) => {
@@ -53,19 +48,6 @@ export default function SignIn() {
       setReady(true);
     });
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    setReset(null);
-    void passwordResetCapabilities()
-      .then((capabilities) => {
-        if (active) setReset(capabilities);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, [apiBase]);
 
   if (!ready) {
     return (
@@ -81,14 +63,6 @@ export default function SignIn() {
     setPending(true);
     setError(null);
     try {
-      if (mode === "forgot") {
-        if (!reset?.passwordReset || !reset.resetUrl) {
-          throw new Error("Password recovery is not configured for this server");
-        }
-        await requestPasswordReset(email.trim(), reset.resetUrl);
-        setResetSent(true);
-        return;
-      }
       if (mode === "up") {
         const trimmedEmail = email.trim();
         await signUp(trimmedEmail, password, name.trim() || trimmedEmail.split("@")[0] || "User");
@@ -132,155 +106,99 @@ export default function SignIn() {
                   textAlign: "center",
                 }}
               >
-                {mode === "in"
-                  ? "Sign in to Rakazo"
-                  : mode === "up"
-                    ? "Sign up for Rakazo"
-                    : "Reset your password"}
+                {mode === "in" ? "Sign in to Rakazo" : "Sign up for Rakazo"}
               </Text>
-              {resetSent ? (
-                <View style={{ alignItems: "center", marginTop: 28 }}>
-                  <Text style={{ color: "#1B1B1E", fontSize: 17 }}>Check your email</Text>
-                  <Text
-                    style={{ color: "#6E6E68", fontSize: 15, marginTop: 10, textAlign: "center" }}
-                  >
-                    If an account exists for that address, we sent a password reset link.
+              {mode === "up" ? (
+                <TextInput
+                  autoComplete="name"
+                  placeholder="Name"
+                  placeholderTextColor="#8C8C86"
+                  value={name}
+                  onChangeText={setName}
+                  style={{
+                    marginTop: 28,
+                    backgroundColor: "#F1F1ED",
+                    borderRadius: 13,
+                    padding: 16,
+                    color: "#1B1B1E",
+                  }}
+                />
+              ) : null}
+              <TextInput
+                autoCapitalize="none"
+                autoComplete="email"
+                keyboardType="email-address"
+                placeholder="Email"
+                placeholderTextColor="#8C8C86"
+                value={email}
+                onChangeText={setEmail}
+                style={{
+                  marginTop: mode === "up" ? 12 : 28,
+                  backgroundColor: "#F1F1ED",
+                  borderRadius: 13,
+                  padding: 16,
+                  color: "#1B1B1E",
+                }}
+              />
+              <TextInput
+                autoComplete={mode === "in" ? "current-password" : "new-password"}
+                placeholder="Password"
+                placeholderTextColor="#8C8C86"
+                returnKeyType="go"
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+                onSubmitEditing={() => void submit()}
+                style={{
+                  marginTop: 12,
+                  backgroundColor: "#F1F1ED",
+                  borderRadius: 13,
+                  padding: 16,
+                  color: "#1B1B1E",
+                }}
+              />
+              {error ? <Text style={{ color: "#C94244", marginTop: 12 }}>{error}</Text> : null}
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void submit()}
+                disabled={pending}
+                style={{
+                  marginTop: 16,
+                  backgroundColor: "#121215",
+                  borderRadius: 13,
+                  padding: 18,
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ color: "#FBFBF9", fontSize: 17 }}>
+                  {pending ? "Working…" : mode === "in" ? "Sign in" : "Sign up"}
+                </Text>
+              </Pressable>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  marginTop: 24,
+                }}
+              >
+                <Text style={{ color: "#8C8C86", fontSize: 15 }}>
+                  {mode === "in" ? "Don’t have an account?" : "Already have an account?"}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => {
+                    setMode((current) => (current === "in" ? "up" : "in"));
+                    setError(null);
+                  }}
+                  style={{ marginLeft: 5 }}
+                >
+                  <Text style={{ color: "#1B1B1E", fontSize: 15, fontWeight: "600" }}>
+                    {mode === "in" ? "Sign up" : "Sign in"}
                   </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setMode("in");
-                      setResetSent(false);
-                    }}
-                    style={{ marginTop: 22 }}
-                  >
-                    <Text style={{ color: "#1B1B1E", fontSize: 15, fontWeight: "600" }}>
-                      Back to sign in
-                    </Text>
-                  </Pressable>
-                </View>
-              ) : (
-                <>
-                  {mode === "up" ? (
-                    <TextInput
-                      autoComplete="name"
-                      placeholder="Name"
-                      placeholderTextColor="#8C8C86"
-                      value={name}
-                      onChangeText={setName}
-                      style={{
-                        marginTop: 28,
-                        backgroundColor: "#F1F1ED",
-                        borderRadius: 13,
-                        padding: 16,
-                        color: "#1B1B1E",
-                      }}
-                    />
-                  ) : null}
-                  <TextInput
-                    autoCapitalize="none"
-                    autoComplete="email"
-                    keyboardType="email-address"
-                    placeholder="Email"
-                    placeholderTextColor="#8C8C86"
-                    value={email}
-                    onChangeText={setEmail}
-                    style={{
-                      marginTop: mode === "up" ? 12 : 28,
-                      backgroundColor: "#F1F1ED",
-                      borderRadius: 13,
-                      padding: 16,
-                      color: "#1B1B1E",
-                    }}
-                  />
-                  {mode === "in" && reset?.passwordReset && reset.resetUrl ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      hitSlop={8}
-                      onPress={() => {
-                        setMode("forgot");
-                        setError(null);
-                      }}
-                      style={{ alignSelf: "flex-end", marginTop: 10 }}
-                    >
-                      <Text style={{ color: "#1B1B1E", fontSize: 14, fontWeight: "600" }}>
-                        Forgot password?
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                  {mode !== "forgot" ? (
-                    <TextInput
-                      autoComplete={mode === "in" ? "current-password" : "new-password"}
-                      placeholder="Password"
-                      placeholderTextColor="#8C8C86"
-                      returnKeyType="go"
-                      secureTextEntry
-                      value={password}
-                      onChangeText={setPassword}
-                      onSubmitEditing={() => void submit()}
-                      style={{
-                        marginTop: 12,
-                        backgroundColor: "#F1F1ED",
-                        borderRadius: 13,
-                        padding: 16,
-                        color: "#1B1B1E",
-                      }}
-                    />
-                  ) : null}
-                  {error ? <Text style={{ color: "#B91C1C", marginTop: 12 }}>{error}</Text> : null}
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => void submit()}
-                    disabled={pending}
-                    style={{
-                      marginTop: 16,
-                      backgroundColor: "#121215",
-                      borderRadius: 13,
-                      padding: 18,
-                      alignItems: "center",
-                    }}
-                  >
-                    <Text style={{ color: "#FBFBF9", fontSize: 17 }}>
-                      {pending
-                        ? "Working…"
-                        : mode === "in"
-                          ? "Sign in"
-                          : mode === "up"
-                            ? "Sign up"
-                            : "Send reset link"}
-                    </Text>
-                  </Pressable>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "center",
-                      alignItems: "center",
-                      marginTop: 24,
-                    }}
-                  >
-                    <Text style={{ color: "#8C8C86", fontSize: 15 }}>
-                      {mode === "in"
-                        ? "Don’t have an account?"
-                        : mode === "up"
-                          ? "Already have an account?"
-                          : ""}
-                    </Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      hitSlop={8}
-                      onPress={() => {
-                        setMode((current) => (current === "in" ? "up" : "in"));
-                        setError(null);
-                      }}
-                      style={{ marginLeft: 5 }}
-                    >
-                      <Text style={{ color: "#1B1B1E", fontSize: 15, fontWeight: "600" }}>
-                        {mode === "in" ? "Sign up" : mode === "up" ? "Sign in" : "Back to sign in"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                </>
-              )}
+                </Pressable>
+              </View>
             </ScrollView>
             <Pressable
               accessibilityRole="button"
@@ -443,7 +361,7 @@ function ServerSheet({
           {warning ? (
             <Text style={{ color: "#8C8C86", marginTop: 12, fontSize: 13 }}>{warning}</Text>
           ) : null}
-          {error ? <Text style={{ color: "#B91C1C", marginTop: 12 }}>{error}</Text> : null}
+          {error ? <Text style={{ color: "#C94244", marginTop: 12 }}>{error}</Text> : null}
           {usesCustomApiBase(current) || draft.trim() !== current ? (
             <Pressable
               onPress={() => void restoreDefault()}

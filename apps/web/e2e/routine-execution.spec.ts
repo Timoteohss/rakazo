@@ -8,7 +8,7 @@ test("routine test-run completes and survives reload", async ({ page }, testInfo
 
   await page.getByTitle("Agent computer").click();
   await expect(page.getByRole("button", { name: "Test run" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Create Routine" }).click();
+  await page.getByRole("button", { name: "New routine" }).click();
   await page.locator("label:has-text('Name') input").fill("Daily verification");
   await page
     .locator("label:has-text('Instruction') textarea")

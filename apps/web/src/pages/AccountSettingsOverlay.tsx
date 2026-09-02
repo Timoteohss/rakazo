@@ -10,13 +10,11 @@ import {
   useState,
 } from "react";
 import { ApprovalRulesSettings } from "../components/ApprovalRulesSettings";
-import { BuiButton, SuccessPop } from "../components/beautiful-ui/primitives";
 import {
   ComputersUnavailableHint,
   computersAreUnavailable,
 } from "../components/ComputersUnavailableHint";
 import { SoftwareUpdateSection } from "../components/SoftwareUpdateSection";
-import { authClient } from "../lib/auth";
 import { getActiveUiLocale, setUiLocale } from "../lib/i18n";
 import { UI_LOCALE_LABELS, UI_LOCALES, type UiLocale } from "../lib/ui-locale";
 
@@ -29,8 +27,8 @@ export function AccountSettingsOverlay({
   onAvatarStyleChange,
   isDeploymentOwner = false,
   sandboxProvider,
-  messagingEnabled = false,
-  onOpenMessaging,
+  phoneEnabled = false,
+  onOpenPhone,
   onClose,
 }: {
   email?: string | null;
@@ -41,8 +39,8 @@ export function AccountSettingsOverlay({
   onAvatarStyleChange: (style: AvatarStyle) => Promise<void>;
   isDeploymentOwner?: boolean;
   sandboxProvider?: string | null;
-  messagingEnabled?: boolean;
-  onOpenMessaging?: () => void;
+  phoneEnabled?: boolean;
+  onOpenPhone?: () => void;
   onClose: () => void;
 }) {
   const { t } = useLingui();
@@ -133,22 +131,20 @@ export function AccountSettingsOverlay({
           {email ? <p className="mt-1 text-[13px] text-[#7A7A80]">{email}</p> : null}
         </section>
 
-        <ChangePasswordSection />
-
-        {messagingEnabled && onOpenMessaging ? (
+        {phoneEnabled && onOpenPhone ? (
           <section className="mt-5 rounded-[14px] border border-[#26262A] bg-[#101012] px-4 py-4">
             <h3 className="text-[15px] font-medium text-[#ECECEE]">
-              <Trans>Messaging</Trans>
+              <Trans>Phone</Trans>
             </h3>
             <p className="mt-3 text-[13px] text-[#7A7A80]">
-              <Trans>Chat apps, group channels, and agent connections.</Trans>
+              <Trans>iMessage channels and agent connections.</Trans>
             </p>
             <button
               type="button"
-              onClick={onOpenMessaging}
+              onClick={onOpenPhone}
               className="mt-3 rounded-full bg-[#26262A] px-4 py-2 text-[13.5px] font-medium text-[#ECECEE]"
             >
-              <Trans>Manage messaging settings</Trans>
+              <Trans>Manage phone settings</Trans>
             </button>
           </section>
         ) : null}
@@ -192,7 +188,7 @@ export function AccountSettingsOverlay({
             })}
           </div>
           {avatarError ? (
-            <p role="alert" className="mt-3 text-[12.5px] text-[#EF4444]">
+            <p role="alert" className="mt-3 text-[12.5px] text-[#F1A8A8]">
               {avatarError}
             </p>
           ) : null}
@@ -256,116 +252,6 @@ export function AccountSettingsOverlay({
         </details>
       </div>
     </div>
-  );
-}
-
-function ChangePasswordSection() {
-  const { t } = useLingui();
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [pending, setPending] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function changePassword() {
-    if (pending) return;
-    if (newPassword !== confirmation) {
-      setError(t`Passwords do not match`);
-      return;
-    }
-    setPending(true);
-    setSaved(false);
-    setError(null);
-    try {
-      const result = await authClient.changePassword({
-        currentPassword,
-        newPassword,
-        revokeOtherSessions: true,
-      });
-      if (result.error) {
-        setError(result.error.message ?? t`Could not change password`);
-        return;
-      }
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmation("");
-      setSaved(true);
-    } catch {
-      setError(t`Could not reach the server`);
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <section className="mt-5 rounded-[14px] border border-[#26262A] bg-[#101012] px-4 py-4">
-      <h3 className="text-[15px] font-medium text-[#ECECEE]">
-        <Trans>Password</Trans>
-      </h3>
-      <div className="mt-3 grid gap-3">
-        <SettingsPasswordInput
-          label={t`Current password`}
-          autoComplete="current-password"
-          value={currentPassword}
-          onChange={setCurrentPassword}
-        />
-        <SettingsPasswordInput
-          label={t`New password`}
-          autoComplete="new-password"
-          value={newPassword}
-          onChange={setNewPassword}
-        />
-        <SettingsPasswordInput
-          label={t`Confirm password`}
-          autoComplete="new-password"
-          value={confirmation}
-          onChange={setConfirmation}
-        />
-      </div>
-      {error ? (
-        <p role="alert" className="mt-3 text-[12.5px] text-[#EF4444]">
-          {error}
-        </p>
-      ) : null}
-      <div className="mt-4 flex items-center gap-3">
-        <BuiButton
-          tone="accent"
-          disabled={pending || currentPassword.length < 8 || newPassword.length < 8}
-          onClick={() => void changePassword()}
-        >
-          {pending ? <Trans>Changing…</Trans> : <Trans>Change password</Trans>}
-        </BuiButton>
-        {saved ? <SuccessPop label={t`Password updated`} /> : null}
-      </div>
-    </section>
-  );
-}
-
-function SettingsPasswordInput({
-  label,
-  autoComplete,
-  value,
-  onChange,
-}: {
-  label: string;
-  autoComplete: "current-password" | "new-password";
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="text-[12.5px] text-[#85858A]">
-      {label}
-      <input
-        aria-label={label}
-        type="password"
-        autoComplete={autoComplete}
-        minLength={8}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="mt-1.5 w-full rounded-[11px] border border-[#2A2A2E] bg-[#171719] px-3.5 py-2.5 text-[14px] text-[#ECECEE] outline-none focus:border-[#4A4A52]"
-      />
-    </label>
   );
 }
 

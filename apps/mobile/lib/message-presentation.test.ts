@@ -9,7 +9,7 @@ import {
 } from "./message-presentation";
 
 describe("mobile message presentation", () => {
-  it("centers handoffs, inter-agent messages, and channel mirrors", () => {
+  it("centers handoffs, inter-agent messages, and phone channel mirrors", () => {
     const blocks = [
       { kind: "handoff", fromBotId: "a", toBotId: "b", text: "Go" },
       { kind: "bot_message_sent", toBotId: "b", toBotName: "Research", text: "Go" },
@@ -20,10 +20,9 @@ describe("mobile message presentation", () => {
         text: "Done",
       },
       {
-        kind: "channel_message",
-        provider: "sendblue",
+        kind: "phone_channel_message",
         channelId: "ch-1",
-        fromAddress: "+15551234567",
+        fromNumber: "+15551234567",
         fromLabel: "Alex",
         text: "Hello from the group",
       },

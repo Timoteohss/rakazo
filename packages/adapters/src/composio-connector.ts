@@ -453,16 +453,6 @@ export class ConnectorRegistry implements ConnectorProvider {
     }
     yield* provider.execute({ ...call, tool: call.route?.toolName ?? call.tool }, context);
   }
-
-  async resolveCall(
-    call: ConnectorCall,
-    context: AdapterContext,
-  ): Promise<{ call: ConnectorCall; tool: ConnectorTool } | undefined> {
-    const connectorId = call.route?.connectorId;
-    if (!connectorId) return undefined;
-    const provider = this.providers.get(connectorId);
-    return provider?.resolveCall?.({ ...call, tool: call.route?.toolName ?? call.tool }, context);
-  }
 }
 
 /** @deprecated Use ConnectorRegistry. */

@@ -8,11 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The phone surface became a multi-platform messaging surface built on the open-source Chat SDK. Slack, WhatsApp Business Cloud, and Telegram DMs now work alongside iMessage/SMS (Sendblue). Link a chat app to your account from Messaging settings on the web: pick a bot, send the short-lived code to the line, and that conversation reaches that bot — each app can point at a different bot. Unknown senders are ignored unless `MESSAGING_OPEN_SIGNUP=true`, which restores the old text-first auto-provisioning (and is the only mode that needs the deployment model key). Webhooks move to `/api/v1/messaging/webhook/<provider>` (the old Sendblue path still works), and each platform mounts when its env credentials are set — see `.env.example`. Group channels remain iMessage-only for now; other platforms are 1:1 until their channel semantics are mapped.
 - Model picker includes Grok 4.6 (xAI) and Ox Alpha Free / GLM-5.3 (OpenCode Go).
 
 ### Added
 
+- Generic chat-sdk messaging transport behind the messaging provider contract: `MESSAGING_PROVIDER` selects sendblue (default) or chat-sdk, and `MESSAGING_CHATSDK_ADAPTER` names the registered adapter. Phone surfaces stay disabled until a concrete adapter is configured.
 - Voice mode: speak replies, hold-to-talk dictation, and half-duplex calls. Speech sits behind a `VoiceProvider` interface (ElevenLabs, OpenAI, Cartesia) so the product is not tied to one vendor. Keys stay on the server.
 - Electron first-run: Docker (default) or this Mac. This Mac runs the bot shell as you, with working directories under your home folder. macOS does not show its own permission dialog; the consent is Rakazo's. The choice is owner-only and is refused when `SANDBOX_PROVIDER` is not `docker` (so E2B and test fakes cannot enable it).
 - GitHub Copilot and SuperGrok / X Premium sign-in via Pi device-code OAuth (`openai-codex`, `github-copilot`, `xai`). Claude Pro is still omitted because Pi's Claude login uses a localhost callback that does not work from the web app.

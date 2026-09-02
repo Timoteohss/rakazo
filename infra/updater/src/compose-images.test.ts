@@ -8,39 +8,19 @@ interface ComposeService {
   build?: unknown;
   command?: unknown;
   env_file?: unknown;
-  /** YAML may parse unquoted scalars as null/number/boolean. */
-  environment?: Record<string, unknown>;
+  environment?: Record<string, string>;
   volumes?: string[];
   ports?: unknown[];
   user?: string;
   restart?: string;
 }
 
-const repoRoot = path.resolve(import.meta.dirname, "../../..");
-const composeFile = path.resolve(repoRoot, "infra/compose/docker-compose.images.yml");
-const publishWorkflowFile = path.resolve(repoRoot, ".github/workflows/publish-server-image.yml");
+const composeFile = path.resolve(import.meta.dirname, "../../compose/docker-compose.images.yml");
 const compose = parse(readFileSync(composeFile, "utf8")) as {
   services: Record<string, ComposeService>;
 };
-const publishWorkflow = parse(readFileSync(publishWorkflowFile, "utf8")) as {
-  jobs?: {
-    publish?: {
-      strategy?: {
-        matrix?: {
-          include?: Array<{ name?: string }>;
-        };
-      };
-    };
-  };
-};
 
 const appServices = ["api", "worker", "web", "supervisor"] as const;
-const FIRST_PARTY_IMAGE = /ghcr\.io\/elie222\/rakazo\/([a-z0-9][a-z0-9._-]*)/g;
-
-function firstPartyImageNames(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  return [...value.matchAll(FIRST_PARTY_IMAGE)].map((match) => match[1] ?? "");
-}
 
 /**
  * The images compose file is the no-checkout happy path. It must stay pull-only and self-contained
@@ -65,40 +45,6 @@ describe("the images compose file", () => {
     expect(compose.services.computer?.image).toContain("ghcr.io/elie222/rakazo/computer");
     expect(compose.services.computer?.image).toContain("RAKAZO_COMPUTER_IMAGE_TAG");
     expect(compose.services.postgres?.image).toMatch(/^postgres:16@sha256:[0-9a-f]{64}$/);
-  });
-
-  it("skips non-string Compose environment scalars when collecting image names", () => {
-    expect(firstPartyImageNames(null)).toEqual([]);
-    expect(firstPartyImageNames(true)).toEqual([]);
-    expect(firstPartyImageNames(7091)).toEqual([]);
-    expect(firstPartyImageNames("ghcr.io/elie222/rakazo/computer:edge")).toEqual(["computer"]);
-  });
-
-  it("only references first-party images that the publish matrix publishes", () => {
-    const published = new Set(
-      (publishWorkflow.jobs?.publish?.strategy?.matrix?.include ?? [])
-        .map((entry) => entry.name)
-        .filter((name): name is string => typeof name === "string" && name.length > 0),
-    );
-    const referenced = new Set<string>();
-    for (const service of Object.values(compose.services)) {
-      for (const name of firstPartyImageNames(service.image)) {
-        referenced.add(name);
-      }
-      for (const value of Object.values(service.environment ?? {})) {
-        for (const name of firstPartyImageNames(value)) {
-          referenced.add(name);
-        }
-      }
-    }
-    expect(published.size).toBeGreaterThan(0);
-    expect(referenced.has("computer")).toBe(true);
-    for (const name of referenced) {
-      expect(
-        published.has(name),
-        `${name} referenced by images compose but omitted from publish matrix`,
-      ).toBe(true);
-    }
   });
 
   it("never builds from a checkout", () => {

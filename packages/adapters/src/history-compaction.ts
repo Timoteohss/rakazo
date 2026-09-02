@@ -42,7 +42,6 @@ export const MAX_COMPACTED_SUMMARY_CHARS = 20_000;
 export const MAX_RECALLED_MEMORIES = 5;
 
 export type CompactedHistoryMessage = {
-  id?: string;
   seq: number;
   role: "user" | "assistant" | "system";
   content: string;

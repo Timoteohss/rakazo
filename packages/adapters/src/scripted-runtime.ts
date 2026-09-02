@@ -94,12 +94,7 @@ export class ScriptedAgentRuntime implements AgentRuntime {
           };
         }
         if (turn.ask) {
-          yield {
-            type: "ask",
-            text: turn.ask.text,
-            detail: turn.ask.detail,
-            actions: turn.ask.actions,
-          };
+          yield { type: "ask", text: turn.ask.text, detail: turn.ask.detail };
           return;
         }
         if (turn.takeover) {
@@ -170,27 +165,6 @@ export function inferScript(
           },
         ],
         complete: true,
-      },
-    ];
-  }
-  if (
-    lower.includes("tappable choices") ||
-    lower.includes("choice buttons") ||
-    lower.includes("pick from these cities")
-  ) {
-    return [
-      {
-        assistant: "pick one to continue.",
-        ask: {
-          text: "Which city should I use?",
-          detail: "Tap one option.",
-          actions: [
-            { id: "choice-1", label: "Berlin" },
-            { id: "choice-2", label: "Seoul" },
-            { id: "choice-3", label: "Toronto" },
-            { id: "choice-4", label: "Lisbon" },
-          ],
-        },
       },
     ];
   }

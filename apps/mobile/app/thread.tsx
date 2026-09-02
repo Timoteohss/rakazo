@@ -20,9 +20,7 @@ import {
   resolveComposerSendPlan,
   SLASH_ACTIONS,
   type SlashActionId,
-  selectedAskActionLabel,
   serializeComposerPrompt,
-  toolActivityLabel,
   truncateSlashDescription,
   userVisibleMessages,
 } from "@rakazo/core";
@@ -65,7 +63,6 @@ import {
   type MobileMessagePage,
   type MobileSnapshot,
   mergeMobileSnapshot,
-  messagingProviderLabel,
   prependMobileMessagePage,
   rpc,
   selectedSpaceId,
@@ -112,30 +109,19 @@ function newClientNonce(): string {
   return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function formatApprovalAnswer(
-  answer: string | undefined,
-  actions: AskAction[] | undefined,
-  approval: boolean,
-): string {
+function formatApprovalAnswer(answer: string | undefined, actions?: AskAction[]): string {
   if (!answer) return "Answered";
-  const selectedAction = actions?.find((action) => action.id === answer);
-  const outcome = selectedAction?.outcome;
-  if (approval && outcome === "created") return "Created";
-  if (approval && outcome === "cancelled") return "Cancelled";
-  if (approval && answer === "allow") return "Allowed once";
-  if (approval && answer === "always") return "Always allowed";
-  if (approval && answer === "deny") return "Denied";
-  return `Answered: ${selectedAskActionLabel(answer, actions)}`;
+  const outcome = actions?.find((action) => action.id === answer)?.outcome;
+  if (outcome === "created") return "Created";
+  if (outcome === "cancelled") return "Cancelled";
+  if (answer === "allow") return "Allowed once";
+  if (answer === "always") return "Always allowed";
+  if (answer === "deny") return "Denied";
+  return `Answered: ${answer}`;
 }
 
 function isWorkingStatus(status: string | undefined): boolean {
-  return (
-    status === "queued" ||
-    status === "leased" ||
-    status === "running" ||
-    status === "waiting_input" ||
-    status === "waiting_takeover"
-  );
+  return status === "queued" || status === "leased" || status === "running";
 }
 
 type NotificationRouteState = "loading" | "ready" | "failed";
@@ -350,7 +336,6 @@ function Thread() {
       return [{ ...member, status: run.status }];
     });
   }, [inGroup, snap?.activeRuns, snap?.members, snap?.run]);
-  const working = inGroup ? workingGroupBots.length > 0 : isWorkingStatus(currentBotStatus);
 
   useEffect(() => {
     void rpc<AgentSkillCatalogEntry[]>("agentSkills/list")
@@ -955,13 +940,11 @@ function Thread() {
         });
         artifactIds.push(artifact.id);
       }
-      const clientNonce = newClientNonce();
       await rpc(
         "threads/send",
         groupTarget
           ? {
               groupId: groupTarget,
-              clientNonce,
               text: trimmed || undefined,
               mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
               artifactIds: artifactIds.length ? artifactIds : undefined,
@@ -969,7 +952,6 @@ function Thread() {
             }
           : {
               botId: botTarget!,
-              clientNonce,
               text: trimmed || undefined,
               mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
               artifactIds: artifactIds.length ? artifactIds : undefined,
@@ -998,36 +980,6 @@ function Thread() {
         setError(err instanceof Error ? err.message : "Failed to send message");
       } else if (isCurrentTarget(botTarget, groupTarget)) {
         setError(err instanceof Error ? err.message : "Failed to send message");
-      }
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function stop() {
-    const targetBotId = botId;
-    const targetGroupId = groupId;
-    if ((!targetBotId && !targetGroupId) || sending) return;
-    setSending(true);
-    setError(null);
-    try {
-      await rpc(
-        "threads/stop",
-        targetGroupId ? { groupId: targetGroupId } : { botId: targetBotId! },
-      );
-    } catch (err) {
-      if (isCurrentTarget(targetBotId, targetGroupId)) {
-        setError(err instanceof Error ? err.message : "Failed to stop work");
-      }
-      setSending(false);
-      return;
-    }
-    try {
-      await refresh();
-    } catch (err) {
-      if (isCurrentTarget(targetBotId, targetGroupId)) {
-        const detail = err instanceof Error ? err.message : "Failed to refresh";
-        setError(`Work stopped, but the thread could not refresh: ${detail}`);
       }
     } finally {
       setSending(false);
@@ -1239,7 +1191,6 @@ function Thread() {
             groupId={groupId}
             message={message}
             botName={name}
-            bots={mentionBots}
             members={snap?.members}
             replyPreview={
               message.replyToMessageId ? messagesById.get(message.replyToMessageId) : undefined
@@ -1329,7 +1280,7 @@ function Thread() {
       style={{ flex: 1, backgroundColor: "#000", paddingHorizontal: 20 }}
     >
       {error ? <Text style={{ color: "#8E8E93", marginTop: 12 }}>{error}</Text> : null}
-      {runError ? <Text style={{ color: "#EF4444", marginTop: 12 }}>{runError}</Text> : null}
+      {runError ? <Text style={{ color: "#E65707", marginTop: 12 }}>{runError}</Text> : null}
       <View style={{ flex: 1, position: "relative" }}>
         {showPinnedPage ? (
           <ScrollView
@@ -1714,7 +1665,7 @@ function Thread() {
             <TextInput
               value={draft}
               onChangeText={updateDraft}
-              accessibilityLabel={name ? `Message ${name}` : "Message"}
+              accessibilityLabel="Message"
               onKeyPress={(event) => {
                 if (
                   event.nativeEvent.key === "Backspace" &&
@@ -1724,13 +1675,7 @@ function Thread() {
                   removeLastChip();
                 }
               }}
-              placeholder={
-                selectedSkill || selectedMentions.length
-                  ? undefined
-                  : name
-                    ? `Message ${name}`
-                    : "Message…"
-              }
+              placeholder={selectedSkill || selectedMentions.length ? undefined : "Message…"}
               placeholderTextColor="#6C6C70"
               keyboardAppearance="dark"
               multiline
@@ -1748,7 +1693,6 @@ function Thread() {
             />
           </View>
           <Pressable
-            accessibilityLabel="Send"
             disabled={sending || !canSend}
             onPress={() => void send()}
             style={{
@@ -1763,25 +1707,6 @@ function Thread() {
           >
             <NativeSymbol ios="arrow.up" android="arrow-up" size={18} color="#17171A" />
           </Pressable>
-          {working ? (
-            <Pressable
-              accessibilityLabel="Stop"
-              disabled={sending}
-              onPress={() => void stop()}
-              style={{
-                borderColor: "#34343A",
-                borderWidth: 1,
-                borderRadius: 22,
-                width: 44,
-                height: 44,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: sending ? 0.5 : 1,
-              }}
-            >
-              <NativeSymbol ios="stop.fill" android="stop" size={15} color="#C9C9CE" />
-            </Pressable>
-          ) : null}
         </View>
         {!inGroup ? (
           <Link
@@ -1913,8 +1838,8 @@ function MentionChipIcon({ mention }: { mention: ComposerMention }) {
 function previewMessageText(message: MobileMessage): string {
   const text = message.blocks
     .flatMap((block) => {
-      if (block.kind === "channel_message" && block.text) {
-        return [`${messagingProviderLabel(block.provider)} · ${block.fromLabel}: ${block.text}`];
+      if (block.kind === "phone_channel_message" && block.text) {
+        return [`iMessage · ${block.fromLabel}: ${block.text}`];
       }
       return block.kind === "text" && block.text ? [block.text] : [];
     })
@@ -1946,7 +1871,6 @@ async function speakMessage(botId: string, message: MobileMessage) {
 const MessageBubble = memo(function MessageBubble({
   botId,
   botName,
-  bots,
   groupId,
   message,
   members,
@@ -1959,7 +1883,6 @@ const MessageBubble = memo(function MessageBubble({
 }: {
   botId: string;
   botName?: string;
-  bots: MobileBot[];
   groupId?: string;
   message: MobileMessage;
   members?: MobileSnapshot["members"];
@@ -1979,7 +1902,7 @@ const MessageBubble = memo(function MessageBubble({
   );
   const ask = message.blocks.find(
     (block): block is Extract<MessageBlock, { kind: "ask" }> =>
-      block.kind === "ask" && !isApprovalAskBlock(block) && !block.actions?.length,
+      block.kind === "ask" && !isApprovalAskBlock(block),
   );
   if (ask) {
     return (
@@ -2017,44 +1940,25 @@ const MessageBubble = memo(function MessageBubble({
   if (peerMessage) {
     const sent = peerMessage.kind === "bot_message_sent";
     const peer = sent ? peerMessage.toBotName : peerMessage.fromBotName;
-    const peerBotId = sent ? peerMessage.toBotId : peerMessage.fromBotId;
-    const label = sent ? `Messaged ${peer}` : `Message from ${peer}`;
-    const peerColor =
-      bots.find((bot) => bot.id === peerBotId)?.color ??
-      members?.find((member) => member.botId === peerBotId)?.color ??
-      "#85858A";
     // Compact receipt only: peer bodies stay out of the human thread.
     // Full view-only peer chat is web-first; mobile keeps the chip without expand.
     return (
-      <View
-        accessible
-        accessibilityLabel={label}
-        style={{
-          width: "100%",
-          paddingVertical: 4,
-          alignItems: "center",
-          justifyContent: "flex-start",
-          flexDirection: "row",
-          gap: 6,
-        }}
-      >
-        <BotAvatar color={peerColor} identity={peerBotId} size={16} />
-        <Text numberOfLines={1} style={{ color: "#85858A", fontSize: 13.5, flexShrink: 1 }}>
-          {label}
+      <View style={{ width: "100%", paddingVertical: 4, alignItems: "center" }}>
+        <Text style={{ color: "#85858A", fontSize: 13.5, textAlign: "center" }}>
+          {sent ? `Messaged ${peer}` : `Message from ${peer}`}
         </Text>
       </View>
     );
   }
-  const channelMessage = message.blocks.find(
-    (block): block is Extract<MessageBlock, { kind: "channel_message" }> =>
-      block.kind === "channel_message",
+  const phoneChannel = message.blocks.find(
+    (block): block is Extract<MessageBlock, { kind: "phone_channel_message" }> =>
+      block.kind === "phone_channel_message",
   );
-  if (channelMessage) {
+  if (phoneChannel) {
     return (
       <View style={{ width: "100%", paddingVertical: 4, alignItems: "center" }}>
         <Text style={{ color: "#85858A", fontSize: 13.5, textAlign: "center" }}>
-          {messagingProviderLabel(channelMessage.provider)} · {channelMessage.fromLabel}:{" "}
-          {channelMessage.text}
+          iMessage · {phoneChannel.fromLabel}: {phoneChannel.text}
         </Text>
       </View>
     );
@@ -2089,7 +1993,7 @@ const MessageBubble = memo(function MessageBubble({
           </Text>
           <Text
             style={{
-              color: failed ? "#EF4444" : running ? "#F5A03C" : "#4ECB71",
+              color: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71",
               fontSize: 13,
             }}
           >
@@ -2136,7 +2040,7 @@ const MessageBubble = memo(function MessageBubble({
           <Text style={{ color: "#ECECEE", fontSize: 15, fontWeight: "600" }}>
             {special.name || "Bot"}
           </Text>
-          <Text style={{ color: removed ? "#EF4444" : "#4ECB71", fontSize: 13 }}>
+          <Text style={{ color: removed ? "#E65707" : "#4ECB71", fontSize: 13 }}>
             {special.status === "archived"
               ? "archived"
               : special.status === "deleted"
@@ -2170,9 +2074,7 @@ const MessageBubble = memo(function MessageBubble({
       </View>
     );
   }
-  const askBlock = message.blocks.find(
-    (block) => block.kind === "ask" && Boolean(block.actions?.length),
-  );
+  const askBlock = message.blocks.find(isApprovalAskBlock);
   if (askBlock?.kind === "ask" && askBlock.actions?.length) {
     return (
       <View style={{ gap: 8, width: "100%" }}>
@@ -2214,11 +2116,7 @@ const MessageBubble = memo(function MessageBubble({
                 fontWeight: "600",
               }}
             >
-              {formatApprovalAnswer(
-                askBlock.answer,
-                askBlock.actions,
-                isApprovalAskBlock(askBlock),
-              )}
+              {formatApprovalAnswer(askBlock.answer, askBlock.actions)}
             </Text>
           ) : canAnswer && onAnswer ? (
             <AskActions
@@ -2242,8 +2140,8 @@ const MessageBubble = memo(function MessageBubble({
   );
   const caption = message.blocks
     .flatMap((block) => {
-      if (block.kind === "channel_message" && block.text) {
-        return [`${messagingProviderLabel(block.provider)} · ${block.fromLabel}: ${block.text}`];
+      if (block.kind === "phone_channel_message" && block.text) {
+        return [`iMessage · ${block.fromLabel}: ${block.text}`];
       }
       return block.kind === "text" && block.text ? [block.text] : [];
     })
@@ -2370,11 +2268,7 @@ const MessageBubble = memo(function MessageBubble({
     <View style={{ gap: 8, width: "100%" }}>
       {segments.map((segment, index) =>
         segment.kind === "tool" ? (
-          <ExpandableToolBlock
-            key={`${message.id}-${message.id.startsWith("progress:") ? "working" : "actions"}-${index}`}
-            block={segment.block}
-            live={message.id.startsWith("progress:")}
-          />
+          <ExpandableToolBlock key={`${message.id}-tools-${index}`} block={segment.block} />
         ) : (
           <MessageTextCard
             key={`${message.id}-content-${index}`}
@@ -2489,10 +2383,8 @@ function AgentEventLabel({
 
 function ExpandableToolBlock({
   block,
-  live,
 }: {
   block: Extract<MessageBlock, { kind: "progress" | "steps" }>;
-  live: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const provider =
@@ -2506,7 +2398,7 @@ function ExpandableToolBlock({
             : []),
           ...(block.pendingToolNames ?? []),
         ].filter(Boolean);
-  const title = toolActivityLabel(block.kind === "steps" ? block.durationMs : undefined, live);
+  const title = provider ? `Using ${provider}` : "Tools";
 
   return (
     <View
@@ -2517,9 +2409,7 @@ function ExpandableToolBlock({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${expanded ? "Hide" : "Show"} ${title}`}
-        accessibilityState={{ expanded }}
-        hitSlop={10}
+        accessibilityLabel={expanded ? "Hide tool details" : "Show tool details"}
         onPress={() => setExpanded((current) => !current)}
         style={{
           flexDirection: "row",
@@ -2528,9 +2418,7 @@ function ExpandableToolBlock({
           paddingVertical: 2,
         }}
       >
-        <Text style={{ color: live ? "#C9C9CE" : "#85858A", fontSize: 12.5, fontWeight: "600" }}>
-          {title}
-        </Text>
+        <Text style={{ color: "#85858A", fontSize: 12.5, fontWeight: "600" }}>{title}</Text>
         <Text style={{ color: "#6C6C70", fontSize: 12 }}>{expanded ? "⌃" : "⌄"}</Text>
       </Pressable>
       {expanded ? (
@@ -2650,7 +2538,7 @@ function AskBlock({
       ) : (
         <Text style={{ color: "#85858A", fontSize: 13.5 }}>Waiting for this bot’s response.</Text>
       )}
-      {error ? <Text style={{ color: "#EF4444", fontSize: 13 }}>{error}</Text> : null}
+      {error ? <Text style={{ color: "#E65707", fontSize: 13 }}>{error}</Text> : null}
     </View>
   );
 }

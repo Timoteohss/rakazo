@@ -1,4 +1,5 @@
 import { t } from "@lingui/core/macro";
+import { Trans as RichTrans } from "@lingui/react";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type {
@@ -42,7 +43,6 @@ import {
   attachmentsForThread,
   buildComposerMentionOptions,
   type ComposerMention,
-  clampMentionHighlightIndex,
   cronFromPreset,
   groupBotsForSidebar,
   inferAttachmentMimeType,
@@ -53,13 +53,11 @@ import {
   mentionChipKey,
   reorderBotTo,
   resolveComposerSendPlan,
-  resolveMentionPickerKey,
   SLASH_ACTIONS,
   type SlashActionId,
   searchHitThreadTarget,
   serializeComposerPrompt,
   speechFromBlocks,
-  toolActivityLabel,
   truncateSlashDescription,
   userVisibleMessages,
 } from "@rakazo/core";
@@ -82,7 +80,6 @@ import {
   Gauge,
   Lock,
   LogOut,
-  Maximize2,
   Menu,
   Mic,
   Monitor,
@@ -106,7 +103,6 @@ import {
   Suspense,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -118,6 +114,7 @@ import { AskCard } from "../components/AskCard";
 import {
   ActiveBotGlyph,
   CollaborationMarker,
+  PeerBotChip,
 } from "../components/beautiful-ui/CollaborationMarker";
 import { BuiButton, BuiCard, SuccessPop } from "../components/beautiful-ui/primitives";
 import { ComputerMaintenanceActions } from "../components/ComputerMaintenanceActions";
@@ -126,10 +123,9 @@ import {
   computersAreUnavailable,
 } from "../components/ComputersUnavailableHint";
 import { MessageHoverMetadata } from "../components/MessageHoverMetadata";
-import { ToolActivityDisclosure, ToolSteps } from "../components/ToolActivityDisclosure";
 import { SkillDraftCard } from "../components/teach/SkillDraftCard";
 import { TeachCaptureOverlay } from "../components/teach/TeachCaptureOverlay";
-import { TeachComputerOverlayControl } from "../components/teach/TeachComputerOverlay";
+import { TeachComputerSection } from "../components/teach/TeachComputerSection";
 import { TeachRecordingChrome, TeachStopButton } from "../components/teach/TeachRecordingChrome";
 import { readActivityMode, writeActivityMode } from "../lib/activity-mode";
 import { type ArtifactTarget, decodeArtifactBase64 } from "../lib/artifact-open";
@@ -145,11 +141,9 @@ import { dictation } from "../lib/dictation";
 import { localTimezone } from "../lib/local-timezone";
 import { connectMcpOauth } from "../lib/mcp-connect";
 import { copyableMessageText } from "../lib/message-text";
-import { providerLabel } from "../lib/messaging";
 import { isFileDrag, revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
 import { clearSpaceSelection, rpc, selectedSpaceId, selectSpace } from "../lib/rpc";
-import { readSeenRunErrorIds, rememberSeenRunErrorId } from "../lib/run-error-storage";
 import {
   activeThreadRuns,
   clearActiveThreadRuns,
@@ -195,10 +189,8 @@ const AccountSettingsOverlay = lazy(() =>
     default: module.AccountSettingsOverlay,
   })),
 );
-const MessagingSettingsOverlay = lazy(() =>
-  import("./MessagingSettingsOverlay").then((module) => ({
-    default: module.MessagingSettingsOverlay,
-  })),
+const PhoneSettingsOverlay = lazy(() =>
+  import("./PhoneSettingsOverlay").then((module) => ({ default: module.PhoneSettingsOverlay })),
 );
 const ModelSettingsOverlay = lazy(() =>
   import("./ModelSettingsOverlay").then((module) => ({ default: module.ModelSettingsOverlay })),
@@ -384,8 +376,8 @@ export function ShellPage() {
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
-  const [messagingSettingsOpen, setMessagingSettingsOpen] = useState(false);
-  const [messagingSurfaceEnabled, setMessagingSurfaceEnabled] = useState(false);
+  const [phoneSettingsOpen, setPhoneSettingsOpen] = useState(false);
+  const [phoneSurfaceEnabled, setPhoneSurfaceEnabled] = useState(false);
   const [accountSettingsFocusUsage, setAccountSettingsFocusUsage] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
@@ -399,23 +391,14 @@ export function ShellPage() {
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [dictating, setDictating] = useState(false);
   const [dictationError, setDictationError] = useState<string | null>(null);
-  const [dismissedRunErrorIds, setDismissedRunErrorIds] =
-    useState<ReadonlySet<string>>(readSeenRunErrorIds);
+  const [dismissedRunErrorIds, setDismissedRunErrorIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [draggedBotId, setDraggedBotId] = useState<string | null>(null);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
-
-  useEffect(() => {
-    const desktop = window.matchMedia("(min-width: 768px)");
-    function closeMobileSidebar() {
-      if (desktop.matches) setMobileSidebarOpen(false);
-    }
-    closeMobileSidebar();
-    desktop.addEventListener("change", closeMobileSidebar);
-    return () => desktop.removeEventListener("change", closeMobileSidebar);
-  }, []);
   const [activityMode, setActivityMode] = useState(readActivityMode);
   const toggleActivityMode = useCallback(() => {
     setActivityMode((on) => {
@@ -450,14 +433,14 @@ export function ShellPage() {
   const [routineError, setRoutineError] = useState<string | null>(null);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
   const [computerOpen, setComputerOpen] = useState(false);
-  const [, setComputerError] = useState<string | null>(null);
+  const [computerError, setComputerError] = useState<string | null>(null);
   useEffect(() => {
     if (!session.data?.user) return;
     let cancelled = false;
-    void rpc.messaging
+    void rpc.phone
       .status()
       .then((status) => {
-        if (!cancelled) setMessagingSurfaceEnabled(status.enabled);
+        if (!cancelled) setPhoneSurfaceEnabled(status.enabled);
       })
       .catch(() => undefined);
     return () => {
@@ -1625,11 +1608,6 @@ export function ShellPage() {
   const transcriptRunning = workingRuns.length > 0;
   const composerRunning = currentRuns.some((run) => isActive(run.status));
   const runError = threadRunError(activeSnapshot, dismissedRunErrorIds);
-  const displayedRunError = !sendError && !dictationError ? runError : null;
-  const displayedRunErrorId = displayedRunError ? (activeSnapshot?.run?.id ?? null) : null;
-  const handleRunErrorPresented = useCallback((runId: string) => {
-    rememberSeenRunErrorId(runId);
-  }, []);
   const transcriptMessages = useMemo(
     () => userVisibleMessages(activeSnapshot?.messages ?? [], { includePeerReceipts: true }),
     [activeSnapshot?.messages],
@@ -1927,7 +1905,7 @@ export function ShellPage() {
       setSendError(null);
       try {
         if (plan.shouldRunRoutines) {
-          const sendNonce = newClientNonce();
+          const sendNonce = crypto.randomUUID();
           await Promise.all(
             plan.routineIds.map((routineId) =>
               rpc.routines.testRun({
@@ -1969,11 +1947,9 @@ export function ShellPage() {
           );
           artifactIds.push(artifact.id);
         }
-        const clientNonce = newClientNonce();
         if (groupTarget) {
           await rpc.threads.send({
             groupId: groupTarget,
-            clientNonce,
             text: trimmed || undefined,
             mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
@@ -1982,7 +1958,6 @@ export function ShellPage() {
         } else if (botTarget) {
           await rpc.threads.send({
             botId: botTarget,
-            clientNonce,
             text: trimmed || undefined,
             mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
@@ -2032,57 +2007,52 @@ export function ShellPage() {
     await refreshThreadRef.current(id);
   }, []);
   const stopRun = useCallback(async () => {
-    if (sending) return;
-    setSending(true);
-    try {
-      const botTarget = activeBotId.current;
-      const groupTarget = activeGroupId.current;
-      if (groupTarget) {
-        setSendError(null);
-        try {
-          await rpc.threads.stop({ groupId: groupTarget });
-        } catch (error) {
-          if (activeGroupId.current === groupTarget) {
-            setSendError(error instanceof Error ? error.message : t`Failed to stop`);
-          }
-          return;
-        }
-        // Stop has no terminal event; clear run UI before refresh races with in-flight gets.
-        if (activeGroupId.current === groupTarget) {
-          updateSnapshot((prev) =>
-            prev && prev.groupId === groupTarget ? clearActiveThreadRuns(prev) : prev,
-          );
-        }
-        await refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
-        return;
-      }
-      if (!botTarget) return;
+    const botTarget = activeBotId.current;
+    const groupTarget = activeGroupId.current;
+    if (groupTarget) {
       setSendError(null);
       try {
-        await rpc.threads.stop({ botId: botTarget });
+        await rpc.threads.stop({ groupId: groupTarget });
       } catch (error) {
-        if (activeBotId.current === botTarget) {
+        if (activeGroupId.current === groupTarget) {
           setSendError(error instanceof Error ? error.message : t`Failed to stop`);
         }
         return;
       }
-      // Stop does not emit a terminal thread event. Clear local run/busy immediately so a
-      // superseded in-flight refresh (older cursor) cannot leave Stop enabled / Take control
-      // blocked while the API is already idle.
-      if (activeBotId.current === botTarget) {
+      // Stop has no terminal event; clear run UI before refresh races with in-flight gets.
+      if (activeGroupId.current === groupTarget) {
         updateSnapshot((prev) =>
-          !prev || (prev.botId !== botTarget && prev.botId) ? prev : clearActiveThreadRuns(prev),
+          prev && prev.groupId === groupTarget ? clearActiveThreadRuns(prev) : prev,
         );
-        const currentComputer = computerRef.current;
-        if (currentComputer?.busyBotName) {
-          commitComputer({ ...currentComputer, busyBotName: null });
-        }
       }
-      await refreshThreadRef.current(botTarget).catch(() => undefined);
-    } finally {
-      setSending(false);
+      await refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
+      return;
     }
-  }, [sending, t]);
+    if (!botTarget) return;
+    setSendError(null);
+    try {
+      await rpc.threads.stop({ botId: botTarget });
+    } catch (error) {
+      if (activeBotId.current === botTarget) {
+        setSendError(error instanceof Error ? error.message : t`Failed to stop`);
+      }
+      return;
+    }
+    // Stop does not emit a terminal thread event. Clear local run/busy immediately so a
+    // superseded in-flight refresh (older cursor) cannot leave Stop enabled / Take control
+    // blocked while the API is already idle.
+    if (activeBotId.current === botTarget) {
+      updateSnapshot((prev) => {
+        if (!prev || (prev.botId !== botTarget && prev.botId)) return prev;
+        return clearActiveThreadRuns(prev);
+      });
+      const currentComputer = computerRef.current;
+      if (currentComputer?.busyBotName) {
+        commitComputer({ ...currentComputer, busyBotName: null });
+      }
+    }
+    await refreshThreadRef.current(botTarget).catch(() => undefined);
+  }, [t]);
   const stopTeaching = useCallback(async () => {
     const id = activeBotId.current;
     if (!id || teachBusy) return;
@@ -2110,18 +2080,6 @@ export function ShellPage() {
     const id = activeBotId.current;
     if (!id) return;
     await refreshThreadRef.current(id);
-  }, []);
-  // Teach chrome needs skills applied before this resolves — refreshThread only
-  // kicks skills.list off in the background, so Stop teaching would never mount
-  // if that background call failed or lagged behind local recovery.
-  const refreshActiveTeaching = useCallback(async () => {
-    const id = activeBotId.current;
-    if (!id) return;
-    await refreshThreadRef.current(id);
-    const skills = await rpc.skills.list({ botId: id });
-    if (activeBotId.current !== id) return;
-    setTaughtSkills(skills);
-    setTaughtSkillsBotId(id);
   }, []);
   const addSkillRoutine = useCallback((name: string, prompt: string) => {
     setRoutineDraft({ ...emptyRoutineDraft(), name, prompt });
@@ -2310,17 +2268,15 @@ export function ShellPage() {
   function dismissComposerError() {
     // The strip shows one message at a time, so only dismiss the run failure when it is the
     // one on screen; otherwise a live run would be silenced before it has even failed.
-    const failedRunId = displayedRunErrorId;
+    const failedRunId = !sendError && !dictationError && runError ? activeSnapshot?.run?.id : null;
     setSendError(null);
     setDictationError(null);
-    if (failedRunId) {
-      rememberSeenRunErrorId(failedRunId);
-      setDismissedRunErrorIds((current) => new Set(current).add(failedRunId));
-    }
+    if (failedRunId) setDismissedRunErrorIds((current) => new Set(current).add(failedRunId));
   }
 
   const embeddedScreenUrl = embeddableScreenUrl(screenUrl);
   const hasControl = userHoldsComputerControl(computer, active?.id);
+  const takeoverBlocked = computerTakeoverBlocked(computer, snapshot?.run?.status);
 
   const userName = session.data?.user.name ?? t`You`;
   const initials = userName
@@ -2697,7 +2653,7 @@ export function ShellPage() {
                         type="button"
                         aria-label={t`Delete ${bot.name}`}
                         onClick={() => setDeleteTarget(bot)}
-                        className="text-[12.5px] text-[#EF4444]"
+                        className="text-[12.5px] text-[#FF5364]"
                       >
                         <Trans>Delete</Trans>
                       </button>
@@ -2727,7 +2683,7 @@ export function ShellPage() {
                         type="button"
                         aria-label={t`Delete ${group.name}`}
                         onClick={() => setDeleteGroupTarget(group)}
-                        className="text-[12.5px] text-[#EF4444]"
+                        className="text-[12.5px] text-[#FF5364]"
                       >
                         <Trans>Delete</Trans>
                       </button>
@@ -2857,11 +2813,7 @@ export function ShellPage() {
         </div>
       </aside>
 
-      <main
-        aria-hidden={mobileSidebarOpen || undefined}
-        inert={mobileSidebarOpen}
-        className="flex min-w-0 flex-1 flex-col bg-[#0D0D0E]"
-      >
+      <main className="flex min-w-0 flex-1 flex-col bg-[#0D0D0E]">
         <div className="app-drag flex items-center justify-between border-b border-[#141416] px-3 py-[17px] md:px-[22px]">
           <div className="flex min-w-0 items-center gap-2">
             <button
@@ -2968,7 +2920,7 @@ export function ShellPage() {
           onSpeak={speakMessage}
         />
         {recordingSkill ? (
-          <div className="px-6 pb-2 text-center text-[13px] text-[#EF4444]">
+          <div className="px-6 pb-2 text-center text-[13px] text-[#E65707]">
             <Trans>Teaching in progress — stop teaching before sending a new message.</Trans>
           </div>
         ) : null}
@@ -2981,9 +2933,7 @@ export function ShellPage() {
           attachmentNotice={attachmentNotice}
           sendError={sendError}
           dictationError={dictationError}
-          runError={displayedRunError}
-          runErrorId={displayedRunErrorId}
-          onRunErrorPresented={handleRunErrorPresented}
+          runError={runError}
           onDismissError={dismissComposerError}
           sending={sending}
           fileInputRef={fileInputRef}
@@ -3077,10 +3027,7 @@ export function ShellPage() {
             ) : null}
             {panel === "computer" && active ? (
               <div>
-                <div
-                  data-testid="computer-preview"
-                  className="group relative aspect-[16/10] overflow-hidden rounded-[14px] bg-[#0E0E10]"
-                >
+                <div className="relative aspect-[16/10] overflow-hidden rounded-[14px] bg-[#0E0E10]">
                   {computerOpen ? (
                     <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
                       <Trans>Open in full window</Trans>
@@ -3116,20 +3063,53 @@ export function ShellPage() {
                   )}
                   <button
                     type="button"
-                    data-testid="computer-preview-open"
-                    className="absolute inset-0 flex cursor-pointer items-center justify-center bg-[rgba(4,4,5,.28)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                    aria-label={t`Open`}
+                    className="absolute inset-0 cursor-pointer"
+                    aria-label={t`Open computer`}
                     onClick={() => void openComputer()}
-                  >
-                    <span className="inline-flex items-center gap-2 rounded-full bg-[rgba(12,12,14,.82)] px-3.5 py-2 text-[14px] text-[#F1F1F2] shadow-[0_8px_24px_rgba(0,0,0,.45)]">
-                      <Maximize2 size={15} strokeWidth={1.9} aria-hidden />
-                      <Trans>Open</Trans>
-                    </span>
-                  </button>
+                  />
                 </div>
-                <p className="mt-2 truncate text-[13.5px] text-[#85858A]" dir="auto">
-                  {t`${active.name}'s screen`}
-                </p>
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <span className="min-w-0 text-[13.5px] text-[#85858A]">
+                    {hasControl
+                      ? t`You have control`
+                      : computerError
+                        ? computerError
+                        : computer?.busyBotName
+                          ? t`${computer.busyBotName} is using it`
+                          : computer?.state === "suspended"
+                            ? t`Asleep`
+                            : computerLabel(computer?.mode, active.name)}
+                  </span>
+                  {hasControl ? (
+                    <ComputerReleaseActions
+                      takeoverRequested={computer?.takeoverRequested ?? false}
+                      onRelease={releaseComputer}
+                    />
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={takeoverBlocked}
+                      title={takeoverBlocked ? t`Stop the bot first` : undefined}
+                      onClick={() => void openComputer()}
+                    >
+                      <Trans>Take control</Trans>
+                    </Button>
+                  )}
+                </div>
+                {computer?.state === "error" ||
+                computer?.state === "stopped" ||
+                (computer?.state === "running" && !embeddedScreenUrl) ? (
+                  <ComputerMaintenanceActions
+                    botId={active.id}
+                    computer={computer}
+                    compact
+                    onChanged={async () => {
+                      await refreshThread(active.id);
+                    }}
+                  />
+                ) : null}
                 <RoutineListHeader
                   onCreate={() => {
                     setRoutineDraft(emptyRoutineDraft());
@@ -3158,6 +3138,27 @@ export function ShellPage() {
                     />
                   );
                 })}
+                {active ? (
+                  <TeachComputerSection
+                    botId={active.id}
+                    computer={computer}
+                    skills={activeTaughtSkills}
+                    busy={teachBusy}
+                    onRefresh={refreshActiveThread}
+                    onOpenComputer={openComputer}
+                    onStopTeaching={stopTeaching}
+                    onAddRoutine={(skill) => {
+                      setRoutineDraft({
+                        ...emptyRoutineDraft(),
+                        name: skill.name || skill.goal.slice(0, 80),
+                        prompt: `Run taught skill: ${skill.name || skill.goal}\n${skill.playbook.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}`,
+                      });
+                      setRoutineWebhookSecret(null);
+                      setEditingRoutine(null);
+                      setPanel("routine");
+                    }}
+                  />
+                ) : null}
               </div>
             ) : null}
             {panel === "create-group" ? (
@@ -3595,8 +3596,8 @@ export function ShellPage() {
           />
         ) : null}
         {mcpOpen ? <McpServersOverlay onClose={() => setMcpOpen(false)} /> : null}
-        {messagingSettingsOpen ? (
-          <MessagingSettingsOverlay onClose={() => setMessagingSettingsOpen(false)} />
+        {phoneSettingsOpen ? (
+          <PhoneSettingsOverlay onClose={() => setPhoneSettingsOpen(false)} />
         ) : null}
       </Suspense>
 
@@ -3610,10 +3611,10 @@ export function ShellPage() {
             avatarStyle={bootstrapMe?.avatarStyle ?? "robot"}
             isDeploymentOwner={bootstrapMe?.isDeploymentOwner === true}
             sandboxProvider={bootstrapMe?.sandboxProvider}
-            messagingEnabled={messagingSurfaceEnabled}
-            onOpenMessaging={() => {
+            phoneEnabled={phoneSurfaceEnabled}
+            onOpenPhone={() => {
               setAccountSettingsOpen(false);
-              setMessagingSettingsOpen(true);
+              setPhoneSettingsOpen(true);
             }}
             onAvatarStyleChange={async (avatarStyle) => {
               const nextMe = await rpc.preferences.update({ avatarStyle });
@@ -3686,10 +3687,7 @@ export function ShellPage() {
         </div>
       ) : computerOpen && active ? (
         <div className="absolute inset-0 z-30 flex flex-col bg-[#050506]">
-          <div
-            data-testid="computer-chrome"
-            className="flex items-center justify-between gap-4 border-b border-[#171719] px-[18px] py-3.5"
-          >
+          <div className="flex items-center justify-between gap-4 border-b border-[#171719] px-[18px] py-3.5">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <BotAvatar
                 color={active.color}
@@ -3724,35 +3722,31 @@ export function ShellPage() {
                   aria-label={t`Stop`}
                   data-testid="computer-overlay-stop"
                   onClick={() => void stopRun()}
-                  disabled={sending}
                 >
                   <Trans>Stop</Trans>
                 </Button>
               ) : null}
               {recordingSkill ? (
                 <TeachStopButton busy={teachBusy} onStop={stopTeaching} />
-              ) : hasControl && computer?.takeoverRequested ? (
-                <ComputerReleaseActions takeoverRequested onRelease={releaseComputer} />
-              ) : null}
-              {active && !recordingSkill ? (
-                <TeachComputerOverlayControl
-                  key={active.id}
-                  botId={active.id}
-                  computer={computer}
-                  busy={teachBusy}
-                  onRefresh={refreshActiveTeaching}
+              ) : hasControl ? (
+                <ComputerReleaseActions
+                  takeoverRequested={computer?.takeoverRequested ?? false}
+                  onRelease={releaseComputer}
                 />
-              ) : null}
-              {active && !recordingSkill ? (
-                <ComputerMaintenanceActions
-                  botId={active.id}
-                  computer={computer}
-                  variant="menu"
-                  onChanged={async () => {
-                    await refreshThread(active.id);
-                  }}
-                />
-              ) : null}
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={takeoverBlocked}
+                  title={takeoverBlocked ? t`Stop the bot first` : undefined}
+                  onClick={() =>
+                    void bootComputer({ takeControl: true, overlay: false }).catch(() => undefined)
+                  }
+                >
+                  <Trans>Take control</Trans>
+                </Button>
+              )}
               <button
                 type="button"
                 className="text-[16px] text-[#85858A] hover:text-[#ECECEE]"
@@ -3766,7 +3760,7 @@ export function ShellPage() {
           {sendError ? (
             <div
               role="alert"
-              className="border-b border-[#5A2A2A] bg-[#2A1717] px-[18px] py-2 text-[13px] text-[#FCA5A5]"
+              className="border-b border-[#5A2A2A] bg-[#2A1717] px-[18px] py-2 text-[13px] text-[#F1A8A8]"
             >
               {sendError}
             </div>
@@ -4091,8 +4085,6 @@ const Composer = memo(function Composer({
   sendError,
   dictationError,
   runError,
-  runErrorId,
-  onRunErrorPresented,
   onDismissError,
   sending,
   fileInputRef,
@@ -4120,8 +4112,6 @@ const Composer = memo(function Composer({
   sendError: string | null;
   dictationError: string | null;
   runError: string | null;
-  runErrorId: string | null;
-  onRunErrorPresented: (runId: string) => void;
   onDismissError: () => void;
   sending: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
@@ -4144,14 +4134,10 @@ const Composer = memo(function Composer({
   const { t } = useLingui();
   const [draft, setDraft] = useState("");
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionHighlightIndex, setMentionHighlightIndex] = useState(0);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<AgentSkillCatalogEntry | null>(null);
   const [selectedMentions, setSelectedMentions] = useState<ComposerMention[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const runErrorRef = useRef<HTMLDivElement>(null);
-  const presentedRunErrorIdRef = useRef<string | null>(null);
-  const mentionListboxId = useId();
   const dragDepth = useRef(0);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const canSend =
@@ -4159,40 +4145,6 @@ const Composer = memo(function Composer({
     selectedSkill !== null ||
     selectedMentions.length > 0 ||
     pendingAttachments.length > 0;
-
-  useEffect(() => {
-    if (!runError || !runErrorId) return;
-    const currentRunErrorId = runErrorId;
-    let frame = 0;
-    function recordIfPresented() {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const element = runErrorRef.current;
-        if (!element || document.visibilityState !== "visible") return;
-        const rect = element.getBoundingClientRect();
-        const topElement = document.elementFromPoint(
-          rect.left + rect.width / 2,
-          rect.top + rect.height / 2,
-        );
-        if (topElement && (topElement === element || element.contains(topElement))) {
-          if (presentedRunErrorIdRef.current === currentRunErrorId) return;
-          presentedRunErrorIdRef.current = currentRunErrorId;
-          onRunErrorPresented(currentRunErrorId);
-        }
-      });
-    }
-    recordIfPresented();
-    const observer = new MutationObserver(recordIfPresented);
-    observer.observe(document.body, { childList: true, subtree: true });
-    document.addEventListener("transitionend", recordIfPresented);
-    document.addEventListener("visibilitychange", recordIfPresented);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      document.removeEventListener("transitionend", recordIfPresented);
-      document.removeEventListener("visibilitychange", recordIfPresented);
-    };
-  }, [onRunErrorPresented, runError, runErrorId]);
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -4230,20 +4182,14 @@ const Composer = memo(function Composer({
     setSlashQuery(nextSlash);
   }
 
-  function focusComposer() {
-    textareaRef.current?.focus();
-  }
-
   function insertMention(mention: ComposerMention) {
     setDraft((current) => current.replace(/@([\w-]*)$/, ""));
     setMentionQuery(null);
-    setMentionHighlightIndex(0);
     setSelectedMentions((current) =>
       current.some((selected) => mentionChipKey(selected) === mentionChipKey(mention))
         ? current
         : [...current, mention],
     );
-    focusComposer();
   }
 
   function insertSkill(skill: AgentSkillCatalogEntry) {
@@ -4273,19 +4219,6 @@ const Composer = memo(function Composer({
       .filter((target) => !query || target.name.toLowerCase().startsWith(query))
       .slice(0, 10);
   }, [mentionQuery, mentionTargets]);
-
-  useEffect(() => {
-    setMentionHighlightIndex(0);
-  }, [mentionQuery, mentionOptions]);
-
-  const activeMentionIndex = clampMentionHighlightIndex(
-    mentionHighlightIndex,
-    mentionOptions.length,
-  );
-  const mentionPickerOpen = mentionOptions.length > 0;
-  const activeMentionOptionId = mentionPickerOpen
-    ? `${mentionListboxId}-option-${activeMentionIndex}`
-    : undefined;
 
   const slashSkillOptions = useMemo(() => {
     if (slashQuery === null) return [];
@@ -4318,7 +4251,6 @@ const Composer = memo(function Composer({
     const text = serializeComposerPrompt(draft, selectedSkill, selectedMentions);
     setDraft("");
     setMentionQuery(null);
-    setMentionHighlightIndex(0);
     setSlashQuery(null);
     setSelectedSkill(null);
     const mentions = selectedMentions;
@@ -4390,21 +4322,17 @@ const Composer = memo(function Composer({
     >
       {sendError || dictationError || runError ? (
         <div
-          ref={runErrorRef}
           role="alert"
           data-testid="composer-error"
-          className="mb-3 flex items-center gap-2 rounded-[14px] border border-[#5A2A2A] bg-[#2A1717] px-4 py-2 text-[13px] text-[#FCA5A5]"
+          className="mb-3 flex items-center gap-2 rounded-[14px] border border-[#5A2A2A] bg-[#2A1717] px-4 py-2 text-[13px] text-[#F1A8A8]"
         >
           <span className="min-w-0 flex-1">{sendError ?? dictationError ?? runError}</span>
           <button
             type="button"
             aria-label={t`Dismiss error`}
             data-testid="composer-error-dismiss"
-            onClick={() => {
-              onDismissError();
-              window.requestAnimationFrame(() => textareaRef.current?.focus());
-            }}
-            className="shrink-0 text-[#FCA5A5] hover:text-[#ECECEE]"
+            onClick={onDismissError}
+            className="shrink-0 text-[#F1A8A8] hover:text-[#ECECEE]"
           >
             <X size={13} strokeWidth={2} />
           </button>
@@ -4462,46 +4390,32 @@ const Composer = memo(function Composer({
           ))}
         </div>
       ) : null}
-      {mentionPickerOpen ? (
+      {mentionOptions.length ? (
         <div
-          id={mentionListboxId}
-          role="listbox"
-          aria-label={t`Mentions`}
           data-testid="mention-picker"
           className="mb-2 overflow-hidden rounded-[14px] border border-[#26262A] bg-[#17171A]"
         >
-          {mentionOptions.map((mention, index) => {
-            const optionId = `${mentionListboxId}-option-${index}`;
-            const highlighted = index === activeMentionIndex;
-            return (
-              <button
-                id={optionId}
-                key={mentionChipKey(mention)}
-                type="button"
-                role="option"
-                aria-selected={highlighted}
-                aria-label={t`@${mention.name}`}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => insertMention(mention)}
-                onMouseEnter={() => setMentionHighlightIndex(index)}
-                className={`flex w-full items-start gap-3 px-4 py-2.5 text-start hover:bg-[#1F1F22] ${
-                  highlighted ? "bg-[#1F1F22]" : ""
-                }`}
-              >
-                <MentionOptionIcon mention={mention} />
-                <span className="min-w-0">
-                  <span dir="auto" className="block text-[14px] text-[#ECECEE]">
-                    @{mention.name}
-                  </span>
-                  {mention.subtitle ? (
-                    <span dir="auto" className="block truncate text-[12.5px] text-[#85858A]">
-                      {mention.subtitle}
-                    </span>
-                  ) : null}
+          {mentionOptions.map((mention) => (
+            <button
+              key={mentionChipKey(mention)}
+              type="button"
+              aria-label={t`@${mention.name}`}
+              onClick={() => insertMention(mention)}
+              className="flex w-full items-start gap-3 px-4 py-2.5 text-start hover:bg-[#1F1F22]"
+            >
+              <MentionOptionIcon mention={mention} />
+              <span className="min-w-0">
+                <span dir="auto" className="block text-[14px] text-[#ECECEE]">
+                  @{mention.name}
                 </span>
-              </button>
-            );
-          })}
+                {mention.subtitle ? (
+                  <span dir="auto" className="block truncate text-[12.5px] text-[#85858A]">
+                    {mention.subtitle}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          ))}
         </div>
       ) : null}
       {showSlashPicker ? (
@@ -4652,32 +4566,7 @@ const Composer = memo(function Composer({
                 removeLastChip();
                 return;
               }
-              const action = resolveMentionPickerKey({
-                key: event.key,
-                shiftKey: event.shiftKey,
-                isComposing: event.nativeEvent.isComposing || event.keyCode === 229,
-                optionCount: mentionOptions.length,
-                highlightedIndex: activeMentionIndex,
-              });
-              if (action.type === "complete") {
-                const mention = mentionOptions[action.index];
-                if (!mention) return;
-                event.preventDefault();
-                insertMention(mention);
-                return;
-              }
-              if (action.type === "move") {
-                event.preventDefault();
-                setMentionHighlightIndex(action.index);
-                return;
-              }
-              if (action.type === "dismiss") {
-                event.preventDefault();
-                setMentionQuery(null);
-                setMentionHighlightIndex(0);
-                return;
-              }
-              if (action.type === "send") {
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 send();
               }
@@ -4691,12 +4580,6 @@ const Composer = memo(function Composer({
                 : undefined
             }
             aria-label={activeName ? t`Message ${activeName}` : t`Message`}
-            role="combobox"
-            aria-autocomplete="list"
-            aria-haspopup="listbox"
-            aria-expanded={mentionPickerOpen}
-            aria-controls={mentionPickerOpen ? mentionListboxId : undefined}
-            aria-activedescendant={activeMentionOptionId}
             name="chat-message"
             autoComplete="off"
             dir="auto"
@@ -4705,26 +4588,14 @@ const Composer = memo(function Composer({
           />
         </div>
         {running ? (
-          <>
-            <button
-              type="button"
-              aria-label={t`Send`}
-              disabled={sending || !canSend || disabled}
-              onClick={send}
-              className="grid h-10 w-10 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A6A6AD] disabled:opacity-50"
-            >
-              <ArrowUp size={18} strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              aria-label={t`Stop`}
-              disabled={sending}
-              onClick={() => void onStop()}
-              className="grid h-10 w-10 place-items-center rounded-full border border-[#34343A] text-[#C9C9CE] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#A6A6AD] disabled:opacity-50"
-            >
-              <Square size={12} strokeWidth={0} fill="currentColor" />
-            </button>
-          </>
+          <button
+            type="button"
+            aria-label={t`Stop`}
+            onClick={() => void onStop()}
+            className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A]"
+          >
+            <Square size={12} strokeWidth={0} fill="currentColor" />
+          </button>
         ) : (
           <button
             type="button"
@@ -4795,7 +4666,9 @@ function MentionChipIcon({ mention }: { mention: ComposerMention }) {
 
 function previewMessageText(message: ThreadMessage): string {
   const text = message.blocks
-    .map((block) => (block.kind === "text" || block.kind === "channel_message" ? block.text : ""))
+    .map((block) =>
+      block.kind === "text" || block.kind === "phone_channel_message" ? block.text : "",
+    )
     .filter(Boolean)
     .join(" ")
     .trim();
@@ -4917,6 +4790,42 @@ function ComputerReleaseActions({
   );
 }
 
+function ToolSteps({
+  steps,
+  currentIndex,
+}: {
+  steps: Extract<ThreadMessage["blocks"][number], { kind: "steps" }>["steps"];
+  currentIndex?: number;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {steps.map((step, index) => {
+        const isCurrent = index === currentIndex;
+        return (
+          <div key={index} className="flex items-center gap-2">
+            <span
+              className="text-[13px]"
+              style={{
+                color: isCurrent ? "#F5A03C" : "#4ECB71",
+                animation: isCurrent ? "rkPulse 1.2s ease-in-out infinite" : undefined,
+              }}
+            >
+              {isCurrent ? "◷" : "✓"}
+            </span>
+            <span
+              className="truncate text-[14px]"
+              style={{ color: isCurrent ? "#DFDFE2" : "#85858A" }}
+            >
+              {step.label}
+              {step.count > 1 ? ` ×${step.count}` : ""}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const MessageView = memo(function MessageView({
   artifactTarget,
   canAnswer,
@@ -4999,16 +4908,12 @@ const MessageView = memo(function MessageView({
               if (block.kind === "steps") {
                 const isCurrentBlock = isLive && i === message.blocks.length - 1;
                 return (
-                  <ToolActivityDisclosure
-                    key={i}
-                    live={isLive}
-                    label={isLive ? t`Working…` : toolActivityLabel(block.durationMs, false)}
-                  >
+                  <div key={i} dir="ltr">
                     <ToolSteps
                       steps={block.steps}
                       currentIndex={isCurrentBlock ? block.steps.length - 1 : undefined}
                     />
-                  </ToolActivityDisclosure>
+                  </div>
                 );
               }
               if (block.kind === "text" || block.kind === "progress") {
@@ -5058,26 +4963,40 @@ const MessageView = memo(function MessageView({
           const sent = block.kind === "bot_message_sent";
           const peer = sent ? block.toBotName : block.fromBotName;
           const peerBotId = sent ? block.toBotId : block.fromBotId;
-          const label = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
+          const ariaLabel = sent ? t`Messaged ${peer}` : t`Message from ${peer}`;
+          const peerChipProps = {
+            ariaLabel,
+            color: peerBot(peerBotId)?.color ?? "#85858A",
+            identity: peerBotId,
+            botName: peer,
+            onClick: () => onOpenPeerMessages({ peerBotId, peerBotName: peer }),
+          };
           return (
-            <CollaborationMarker
-              key={i}
-              ariaLabel={label}
-              color={peerBot(peerBotId)?.color ?? "#85858A"}
-              identity={peerBotId}
-              label={label}
-              onClick={() => onOpenPeerMessages({ peerBotId, peerBotName: peer })}
-            />
+            <CollaborationMarker key={i}>
+              {sent ? (
+                <RichTrans
+                  id="Messaged {peer}"
+                  message="Messaged {peer}"
+                  values={{ peer: <PeerBotChip {...peerChipProps} /> }}
+                />
+              ) : (
+                <RichTrans
+                  id="Message from {peer}"
+                  message="Message from {peer}"
+                  values={{ peer: <PeerBotChip {...peerChipProps} /> }}
+                />
+              )}
+            </CollaborationMarker>
           );
         }
-        if (block.kind === "channel_message") {
+        if (block.kind === "phone_channel_message") {
           return (
             <div
               key={i}
               className="flex items-center justify-center gap-2 py-1 text-[13.5px] text-[#85858A]"
             >
               <span>
-                {providerLabel(block.provider)} · {block.fromLabel}: {block.text}
+                iMessage · {block.fromLabel}: {block.text}
               </span>
             </div>
           );
@@ -5112,15 +5031,10 @@ const MessageView = memo(function MessageView({
                 className="max-w-[74%] space-y-1.5 rounded-[20px] bg-[#1A1A1D] px-[18px] py-3"
                 dir="ltr"
               >
-                <ToolActivityDisclosure
-                  live={isLive}
-                  label={isLive ? t`Working…` : toolActivityLabel(block.durationMs, false)}
-                >
-                  <ToolSteps
-                    steps={block.steps}
-                    currentIndex={isLive ? block.steps.length - 1 : undefined}
-                  />
-                </ToolActivityDisclosure>
+                <ToolSteps
+                  steps={block.steps}
+                  currentIndex={isLive ? block.steps.length - 1 : undefined}
+                />
               </div>
             </div>
           );
@@ -5141,11 +5055,11 @@ const MessageView = memo(function MessageView({
                   className="rounded-full px-[11px] py-1 text-[13px]"
                   style={{
                     background: failed
-                      ? "rgba(239,68,68,.14)"
+                      ? "rgba(230,87,7,.14)"
                       : running
                         ? "rgba(245,160,60,.14)"
                         : "rgba(48,162,75,.14)",
-                    color: failed ? "#EF4444" : running ? "#F5A03C" : "#4ECB71",
+                    color: failed ? "#E65707" : running ? "#F5A03C" : "#4ECB71",
                     animation: running ? "rkPulse 1.2s ease-in-out infinite" : undefined,
                   }}
                 >
@@ -5180,8 +5094,8 @@ const MessageView = memo(function MessageView({
                 <span
                   className="rounded-full px-[11px] py-1 text-[13px]"
                   style={{
-                    background: removed ? "rgba(239,68,68,.14)" : "rgba(48,162,75,.14)",
-                    color: removed ? "#EF4444" : "#4ECB71",
+                    background: removed ? "rgba(230,87,7,.14)" : "rgba(48,162,75,.14)",
+                    color: removed ? "#E65707" : "#4ECB71",
                   }}
                 >
                   {block.status === "archived" ? (
@@ -5438,7 +5352,7 @@ function CreateBotForm({
         </button>
       </div>
       {error ? (
-        <p role="alert" data-testid="create-bot-error" className="mb-3 text-[13px] text-[#EF4444]">
+        <p role="alert" data-testid="create-bot-error" className="mb-3 text-[13px] text-[#C94244]">
           {error}
         </p>
       ) : null}
@@ -5747,7 +5661,7 @@ function BotSettings({
           </label>
         ) : null}
       </details>
-      {error ? <p className="mt-2 text-[13px] text-[#EF4444]">{error}</p> : null}
+      {error ? <p className="mt-2 text-[13px] text-[#E65707]">{error}</p> : null}
       <div className="mt-5 flex flex-col items-start gap-3">
         <button
           type="button"
@@ -5791,7 +5705,7 @@ function BotSettings({
         >
           <Trans>Export</Trans>
         </button>
-        <button type="button" onClick={onClear} className="text-[14px] text-[#EF4444]">
+        <button type="button" onClick={onClear} className="text-[14px] text-[#E65707]">
           <Trans>Clear conversation</Trans>
         </button>
         <ComputerMaintenanceActions
@@ -5899,7 +5813,7 @@ function NewSpaceDialog({
             className="mt-2 w-full rounded-[11px] border border-[#343438] bg-[#101012] px-3.5 py-2.5 text-[14.5px] text-[#ECECEE] outline-none focus:border-[#66666D]"
           />
         </label>
-        {error ? <p className="mt-3 text-[13.5px] text-[#EF4444]">{error}</p> : null}
+        {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
           <BuiButton disabled={saving} onClick={onCancel}>
             <Trans>Cancel</Trans>
@@ -5976,7 +5890,7 @@ function NewBotSectionDialog({
             className="mt-2 w-full rounded-[11px] border border-[#343438] bg-[#101012] px-3.5 py-2.5 text-[14.5px] text-[#ECECEE] outline-none focus:border-[#66666D]"
           />
         </label>
-        {error ? <p className="mt-3 text-[13.5px] text-[#EF4444]">{error}</p> : null}
+        {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
           <button
             type="button"
@@ -6048,7 +5962,7 @@ function ClearConversationDialog({
             available.
           </Trans>
         </p>
-        {error ? <p className="mt-3 text-[13.5px] text-[#EF4444]">{error}</p> : null}
+        {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
           <button
             type="button"
@@ -6069,7 +5983,7 @@ function ClearConversationDialog({
                 setClearing(false);
               });
             }}
-            className="rounded-[10px] bg-[#DC2626] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
+            className="rounded-[10px] bg-[#FF5364] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
           >
             {clearing ? <Trans>Clearing…</Trans> : <Trans>Clear</Trans>}
           </button>
@@ -6163,7 +6077,7 @@ function DeleteBotDialog({
             </span>
           </label>
         </fieldset>
-        {error ? <p className="mt-3 text-[13.5px] text-[#EF4444]">{error}</p> : null}
+        {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
           <button
             type="button"
@@ -6184,7 +6098,7 @@ function DeleteBotDialog({
                 setDeleting(false);
               });
             }}
-            className="rounded-[10px] bg-[#DC2626] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
+            className="rounded-[10px] bg-[#FF5364] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
           >
             {deleting ? <Trans>Deleting…</Trans> : <Trans>Delete</Trans>}
           </button>
@@ -6239,7 +6153,7 @@ function DeleteItemDialog({
         <p id="delete-item-description" className="mt-2 text-[14px] leading-6 text-[#9A9AA0]">
           <Trans>This cannot be undone.</Trans>
         </p>
-        {error ? <p className="mt-3 text-[13.5px] text-[#EF4444]">{error}</p> : null}
+        {error ? <p className="mt-3 text-[13.5px] text-[#FF5364]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2.5">
           <button
             type="button"
@@ -6266,7 +6180,7 @@ function DeleteItemDialog({
                 setDeleting(false);
               });
             }}
-            className="rounded-[10px] bg-[#DC2626] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
+            className="rounded-[10px] bg-[#FF5364] px-3.5 py-2 text-[14px] font-medium text-white disabled:opacity-40"
           >
             {deleting ? <Trans>Deleting…</Trans> : <Trans>Delete</Trans>}
           </button>
@@ -6310,7 +6224,7 @@ function computerPlaceholder(
 ) {
   if (state === "booting" || booting) return t`Booting live desktop…`;
   if (state === "running") return label;
-  if (state === "suspended") return t`Computer is asleep. Open it to wake.`;
+  if (state === "suspended") return t`Computer is asleep. Take control to wake it.`;
   if (state === "error") return t`Computer failed to boot`;
   return t`Computer is stopped`;
 }
@@ -6827,14 +6741,6 @@ function ArtifactImage({
       ) : null}
     </div>
   );
-}
-
-function newClientNonce(): string {
-  const webCrypto = globalThis.crypto;
-  if (webCrypto && typeof webCrypto.randomUUID === "function") {
-    return webCrypto.randomUUID();
-  }
-  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function readFileAsBase64(file: File): Promise<string> {
