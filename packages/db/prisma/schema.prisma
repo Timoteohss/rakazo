@@ -1096,6 +1096,23 @@ model MessagingOutbound {
   @@map("messaging_outbound")
 }
 
+model MessagingBaileysSession {
+  id           String   @id @default(cuid())
+  scope        String   @unique
+  status       String   @default("unpaired")
+  creds        Json?
+  keys         Json?
+  lastQr       String?
+  lastQrAt     DateTime?
+  connectedJid String?
+  pairingPhone String?
+  lastError    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("messaging_baileys_sessions")
+}
+
 model AgentConnection {
   id             String   @id @default(cuid())
   requesterBotId String
