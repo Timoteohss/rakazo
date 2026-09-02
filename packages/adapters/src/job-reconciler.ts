@@ -1,9 +1,4 @@
-import {
-  type JobPublisher,
-  messagingDeliverJob,
-  routineWakeupJob,
-  runContinueJob,
-} from "@rakazo/adapter-kit";
+import { type JobPublisher, routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
 import type { Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
 import type { PoolClient } from "pg";
@@ -151,7 +146,7 @@ export function createJobReconciler(
             }
           : { controlLeaseExpiresAt: null, id: { gt: controlCursor.id } }
         : undefined;
-      const [runs, routines, controls, dueOutbound, unmirroredMessagingRuns] = await Promise.all([
+      const [runs, routines, controls] = await Promise.all([
         deps.prisma.run.findMany({
           where: {
             AND: [
@@ -210,19 +205,6 @@ export function createJobReconciler(
             controlLeaseId: true,
             controlLeaseExpiresAt: true,
           },
-        }),
-        deps.prisma.messagingOutbound.findFirst({
-          where: {
-            status: "pending",
-            OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
-          },
-          select: { id: true },
-        }),
-        deps.prisma.run.findMany({
-          where: { trigger: "messaging", status: "completed", messagingMirroredAt: null },
-          orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
-          take: batchSize,
-          select: { id: true },
         }),
       ]);
 
@@ -302,8 +284,6 @@ export function createJobReconciler(
               ]
             : [],
         ),
-        ...(dueOutbound ? [deps.jobs.enqueue(messagingDeliverJob())] : []),
-        ...unmirroredMessagingRuns.map((run) => deps.jobs.enqueue(messagingDeliverJob(run.id))),
       ]);
 
       const lastRun = runs.at(-1);

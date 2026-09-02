@@ -294,8 +294,7 @@ describe("renderScreenshotGallery", () => {
     expect(html).toContain("initialColumns = localStorage.getItem(storageKey) || initialColumns");
     expect(html).toContain('<span class="badge checkpoint">CHECKPOINT</span>');
     expect(html).toContain('<span class="badge new">NEW</span>');
-    expect(html).toContain('data-filter="new" aria-pressed="true"');
-    expect(html).toContain('data-filter="review" aria-pressed="false"');
+    expect(html).toContain('data-filter="review" aria-pressed="true"');
     expect(html).toContain("Compared with latest successful main run");
     expect(html).toContain(`@media (max-width: 900px) {
       header { align-items: start; flex-direction: column; }

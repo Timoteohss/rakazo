@@ -21,9 +21,6 @@ export function normalizeApiBase(input: string): EndpointResult {
     return { ok: false, error: "Use an http or https URL" };
   }
   if (!parsed.hostname) return { ok: false, error: "That URL is missing a host" };
-  if (parsed.protocol === "http:" && !isLanOrLocalHost(parsed.hostname)) {
-    return { ok: false, error: "Public servers need https://" };
-  }
   const url = `${parsed.protocol}//${parsed.host}`;
   return { ok: true, url };
 }
@@ -84,8 +81,13 @@ export async function probeApiBase(
 }
 
 function originOnly(value: string) {
-  const parsed = normalizeApiBase(value);
-  return parsed.ok ? parsed.url : null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return null;
+  }
 }
 
 function isLanOrLocalHost(hostname: string) {

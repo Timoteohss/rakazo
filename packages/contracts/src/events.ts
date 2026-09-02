@@ -144,7 +144,6 @@ export const MessageBlock = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("steps"),
     steps: z.array(z.object({ label: z.string(), count: z.number().int().positive() })),
-    durationMs: z.number().int().nonnegative().optional(),
   }),
   z.object({
     kind: z.literal("subagent"),
@@ -211,11 +210,10 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     hop: z.number().int().positive().optional(),
   }),
   z.object({
-    /** A group-chat message delivered into a member bot's own thread. */
-    kind: z.literal("channel_message"),
-    provider: z.string(),
+    /** An iMessage group message delivered into a member bot's own thread. */
+    kind: z.literal("phone_channel_message"),
     channelId: Id,
-    fromAddress: z.string(),
+    fromNumber: z.string(),
     fromLabel: z.string(),
     text: z.string(),
     hop: z.number().int().nonnegative().optional(),
@@ -239,6 +237,13 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     returnToMessageId: Id.optional(),
     /** Links in a bot-started chain; absent when a person started it. */
     hop: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    kind: z.literal("whatsapp_qr"),
+    status: z.enum(["pending", "connected", "expired", "failed"]),
+    qrDataUrl: z.string().optional(),
+    expiresAt: z.string().optional(),
+    errorMessage: z.string().optional(),
   }),
 ]);
 export type MessageBlock = z.infer<typeof MessageBlock>;
@@ -274,6 +279,6 @@ export function canReactToThreadMessage(message: Pick<ThreadMessage, "id" | "blo
   return (
     !message.id.startsWith("progress:") &&
     !message.id.startsWith("subagent:") &&
-    !message.blocks.some((block) => block.kind === "channel_message")
+    !message.blocks.some((block) => block.kind === "phone_channel_message")
   );
 }

@@ -59,11 +59,6 @@ with the matching API key.
 Default image tag is `edge` (main builds, `linux/amd64`). Details and tags:
 [self-hosting guide](./docs/self-host.md#published-images-no-checkout).
 
-On restricted networks, override the installer download base (`RAKAZO_DOWNLOAD_BASE`), skip
-existing Compose files (`--local` / `RAKAZO_DOWNLOAD_SKIP_EXISTING`), or mirror the bootstrap
-script URL — see
-[Restricted networks / mirror downloads](./docs/self-host.md#restricted-networks--mirror-downloads).
-
 For an agent-assisted install, use [SETUP_PROMPT.md](./SETUP_PROMPT.md).
 
 ## Local development (source checkout)
@@ -129,10 +124,9 @@ Mobile build and release instructions live in [docs/mobile-release.md](./docs/mo
 
 ## Web UI language
 
-The web (and Electron-hosted) UI supports English, Deutsch, 한국어, Türkçe, हिन्दी,
-Português (Brasil), and 简体中文. Change it under **Settings → Language**. The marketing
-homepage (`apps/www`) is available in en/de/ko via footer language links (`/`, `/de/`,
-`/ko/`); other marketing pages stay English.
+The web (and Electron-hosted) UI supports English, Deutsch, and 한국어. Change it under
+**Settings → Language**. The marketing homepage (`apps/www`) is available in en/de/ko via
+footer language links (`/`, `/de/`, `/ko/`); other marketing pages stay English.
 
 ## Development
 

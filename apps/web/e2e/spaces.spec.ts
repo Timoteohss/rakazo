@@ -13,7 +13,7 @@ test("spaces stay invisible by default and chat creation requires approval", asy
   await expect(sidebar.getByRole("button", { name: /^Chief/ })).toHaveCount(1);
   await captureScreenshot(page, testInfo, "single-space-sidebar");
 
-  await page.getByTitle("Create", { exact: true }).click();
+  await page.getByTitle("Create").click();
   await page.getByRole("button", { name: "New space" }).click();
   const dialog = page.getByRole("dialog", { name: "New space" });
   await expect(dialog.getByLabel("Name")).toBeVisible();
@@ -21,7 +21,7 @@ test("spaces stay invisible by default and chat creation requires approval", asy
   await captureScreenshot(page, testInfo, "new-space-dialog");
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
-  const composer = page.getByRole("combobox", { name: "Message Chief" });
+  const composer = page.getByRole("textbox", { name: "Message Chief" });
   await composer.fill("Create a space named Customer support");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Create space", exact: true })).toBeVisible({

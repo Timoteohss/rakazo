@@ -13,17 +13,6 @@ import {
   sanitizeConnectorError,
 } from "./connector-safety.js";
 import {
-  CATALOG_EXECUTE,
-  catalogEntries,
-  catalogGroupLabel,
-  DIRECT_TOOL_LIMIT,
-  disambiguateInstalledToolNames,
-  executeLazyCatalogControl,
-  isLazyCatalogControlRoute,
-  lazyCatalogTools,
-  resolveCatalogCall,
-} from "./lazy-tool-catalog.js";
-import {
   assertSafeRemoteUrl,
   callRemoteMcpTool,
   createSafeRemoteFetch,
@@ -107,7 +96,6 @@ type ApiOperation = z.infer<typeof ApiOperationSchema>;
 type InstalledRow = {
   id: string;
   kind: string;
-  name: string;
   source: string;
   secretId: string | null;
   config: unknown;
@@ -132,21 +120,6 @@ export class InstalledConnectorProvider implements ConnectorProvider {
   }
 
   async discoverTools(context: AdapterContext): Promise<ConnectorTool[]> {
-    const tools = await this.authorizedTools(context);
-    if (tools.length <= DIRECT_TOOL_LIMIT) return tools;
-    return lazyCatalogTools("installed", "installed", "API", catalogEntries(tools));
-  }
-
-  async resolveCall(
-    call: ConnectorCall,
-    context: AdapterContext,
-  ): Promise<{ call: ConnectorCall; tool: ConnectorTool } | undefined> {
-    // Wrappers have no resourceId; real tools always do.
-    if (call.route?.resourceId || call.route?.toolName !== CATALOG_EXECUTE) return undefined;
-    return resolveCatalogCall(call, catalogEntries(await this.authorizedTools(context)));
-  }
-
-  private async authorizedTools(context: AdapterContext): Promise<ConnectorTool[]> {
     const installs = await this.prisma.capabilityInstall.findMany({
       where: {
         spaceId: context.spaceId,
@@ -162,14 +135,13 @@ export class InstalledConnectorProvider implements ConnectorProvider {
       );
       tools.push(...groups.flat());
     }
-    return disambiguateInstalledToolNames(tools);
+    return tools;
   }
 
   private async discoverInstall(
     install: InstalledRow,
     context: AdapterContext,
   ): Promise<ConnectorTool[]> {
-    const catalogGroup = catalogGroupLabel(install.name, install.kind, install.id);
     try {
       if (install.kind === "mcp") {
         const config = McpConfigSchema.parse(install.config);
@@ -187,7 +159,6 @@ export class InstalledConnectorProvider implements ConnectorProvider {
             connectorId: "installed",
             resourceId: install.id,
             toolName: tool.name,
-            catalogGroup,
           },
         }));
       }
@@ -202,7 +173,6 @@ export class InstalledConnectorProvider implements ConnectorProvider {
             connectorId: "installed",
             resourceId: install.id,
             toolName: operation.id,
-            catalogGroup,
           },
         }));
       }
@@ -213,18 +183,6 @@ export class InstalledConnectorProvider implements ConnectorProvider {
   }
 
   async *execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent> {
-    if (call.route?.connectorId === "installed" && isLazyCatalogControlRoute(call.route)) {
-      try {
-        yield* executeLazyCatalogControl(
-          call,
-          catalogEntries(await this.authorizedTools(context)),
-          (resolved) => this.execute(resolved, context),
-        );
-      } catch (error) {
-        yield { type: "error", message: sanitizeConnectorError(error) };
-      }
-      return;
-    }
     const installId = call.route?.resourceId;
     if (!installId) {
       yield { type: "error", message: "Installed connector route is missing" };

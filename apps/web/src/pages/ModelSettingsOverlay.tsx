@@ -390,7 +390,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
           </div>
 
           <div ref={detailScrollRef} className="rk-scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
-            {error ? <p className="mb-4 text-sm text-[#EF4444]">{error}</p> : null}
+            {error ? <p className="mb-4 text-sm text-[#C94244]">{error}</p> : null}
             {notice ? <p className="mb-4 text-sm text-[#4ECB71]">{notice}</p> : null}
             {selected ? (
               <>
@@ -506,7 +506,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                     </>
                   )}
                 </div>
-                {!isOpenAiCompatible && selected.billing ? (
+                {!isOpenAiCompatible ? (
                   <p className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">
                     {selected.billing}
                   </p>

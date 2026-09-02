@@ -1776,12 +1776,7 @@ describeJourneys("required product journeys", () => {
       where: { threadId_clientNonce: { threadId: group.threadId, clientNonce: replayNonce } },
       include: { sourceRuns: true },
     });
-    expect(replayMessage.sourceRuns).toHaveLength(1);
-    await expect(
-      prisma.steeringMessage.findUniqueOrThrow({
-        where: { messageId_botId: { messageId: replayMessage.id, botId: botB.id } },
-      }),
-    ).resolves.toMatchObject({ runId: staleRun.id, claimedAt: null });
+    expect(replayMessage.sourceRuns).toHaveLength(2);
     expect(
       await prisma.message.count({ where: { threadId: group.threadId, clientNonce: replayNonce } }),
     ).toBe(1);

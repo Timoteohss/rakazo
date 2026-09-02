@@ -47,9 +47,7 @@ function responseErrorMessage(body: unknown, fallback: string): string {
 }
 
 export function currentApiBase() {
-  const parsed = normalizeApiBase(cachedApiBase ?? defaultApiBase());
-  if (!parsed.ok) throw new Error(parsed.error);
-  return parsed.url;
+  return cachedApiBase ?? defaultApiBase();
 }
 
 export async function loadApiBase() {
@@ -316,36 +314,6 @@ export function signUp(email: string, password: string, name: string) {
   return authenticateWithEmail("sign-up", { email, password, name });
 }
 
-export type PasswordResetCapabilities = { passwordReset: boolean; resetUrl: string | null };
-
-export async function passwordResetCapabilities(): Promise<PasswordResetCapabilities> {
-  const response = await fetch(`${currentApiBase()}/api/auth/capabilities`, {
-    headers: { origin: "rakazo://" },
-  });
-  if (!response.ok) throw new Error("Could not load password recovery settings");
-  return (await response.json()) as PasswordResetCapabilities;
-}
-
-export async function requestPasswordReset(email: string, redirectTo: string): Promise<void> {
-  const response = await fetch(`${currentApiBase()}/api/auth/request-password-reset`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: "rakazo://" },
-    body: JSON.stringify({ email, redirectTo }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(responseErrorMessage(body, "Could not send reset email"));
-}
-
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  const response = await fetch(`${currentApiBase()}/api/auth/change-password`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: "rakazo://", ...(await authHeaders()) },
-    body: JSON.stringify({ currentPassword, newPassword, revokeOtherSessions: true }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(responseErrorMessage(body, "Could not change password"));
-}
-
 export async function signOut() {
   await rpc("notifications/unregisterPush").catch(() => undefined);
   const headers = await authHeaders();
@@ -519,22 +487,11 @@ export function prependMobileMessagePage(
   return prependThreadHistoryPage(prev, page);
 }
 
-const MESSAGING_PROVIDER_LABELS: Record<string, string> = {
-  sendblue: "iMessage",
-  slack: "Slack",
-  whatsapp: "WhatsApp",
-  telegram: "Telegram",
-};
-
-export function messagingProviderLabel(provider: string): string {
-  return MESSAGING_PROVIDER_LABELS[provider] ?? provider;
-}
-
 export function blockText(message: MobileMessage) {
   return message.blocks
     .map((block) => {
-      if (block.kind === "channel_message") {
-        return `${messagingProviderLabel(block.provider)} · ${block.fromLabel}: ${block.text}`;
+      if (block.kind === "phone_channel_message") {
+        return `iMessage · ${block.fromLabel}: ${block.text}`;
       }
       if (block.kind === "subagent") {
         return `${block.name ?? "subagent"}: ${block.result || block.progress || block.task || ""}`;
