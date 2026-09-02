@@ -84,7 +84,11 @@ export class BaileysEmulator {
 
   private chat: ChatInstance | null = null;
   private adapterRef: BaileysFakeAdapter | null = null;
-  private pendingInbounds: BaileysEmulatorInboundInput[] = [];
+  private pendingInbounds: Array<{
+    input: BaileysEmulatorInboundInput;
+    resolve: () => void;
+    reject: (err: unknown) => void;
+  }> = [];
   private handleCounter = 0;
   private failRemaining = 0;
 
@@ -105,11 +109,12 @@ export class BaileysEmulator {
   _attach(chat: ChatInstance, adapter: BaileysFakeAdapter): void {
     this.chat = chat;
     this.adapterRef = adapter;
-    // Flush any inbounds queued before chat was ready.
+    // Flush any inbounds queued before chat was ready, wiring each queued
+    // simulateInbound promise to its actual delivery completion.
     const pending = [...this.pendingInbounds];
     this.pendingInbounds = [];
-    for (const input of pending) {
-      void this._inject(input);
+    for (const entry of pending) {
+      this._inject(entry.input).then(entry.resolve, entry.reject);
     }
   }
 
@@ -128,11 +133,8 @@ export class BaileysEmulator {
         for (const l of this.qrListeners) l(update.qr);
       }
     }
-    if (update.connection === "open") {
+    if (update.connection === "open" || update.connection === "close") {
       this.currentQr = null;
-    }
-    if (update.connection === "close") {
-      // QR cleared on close mirrors real Baileys close flow.
     }
     for (const l of this.connectionListeners) l(update);
   }
@@ -198,11 +200,16 @@ export class BaileysEmulator {
    * Drive an inbound message through the real Chat SDK, mirroring
    * `socket.ev.emit("messages.upsert", {messages, type:"notify"})`.
    * Queues if chat hasn't initialized yet (lazy ChatSdkMessagingSurface).
+   * The returned promise settles only after delivery completes — even when
+   * queued pre-attach, it is wired to the eventual _inject outcome so
+   * awaiters observe real processing and failures reject rather than surface
+   * as unhandled rejections.
    */
   async simulateInbound(input: BaileysEmulatorInboundInput): Promise<void> {
     if (!this.chat || !this.adapterRef) {
-      this.pendingInbounds.push(input);
-      return;
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      this.pendingInbounds.push({ input, resolve, reject });
+      return promise;
     }
     await this._inject(input);
   }
@@ -214,6 +221,7 @@ export class BaileysEmulator {
     const maybeInit = (chat as unknown as { ensureInitialized?: () => Promise<void> }).ensureInitialized;
     if (maybeInit) await maybeInit.call(chat);
     const handle = input.handle ?? this.nextHandle();
+
 
     // Resolve JIDs.
     const senderJid = normalizeJid(input.from);

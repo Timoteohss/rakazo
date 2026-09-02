@@ -192,8 +192,25 @@ describe("emulated baileys platform connection", () => {
     expect(emulator.currentQr).toBeNull();
     emulator.simulateConnectionClose();
     expect(emulator.connectionState).toBe("close");
+    expect(emulator.currentQr).toBeNull();
 
     expect(updates).toEqual(["connecting", "open", "close"]);
+  });
+
+  it("clears currentQr on close even when a QR is active", async () => {
+    const { emulator } = createHarness();
+    const first = emulator.simulateQr("qr-active");
+    expect(emulator.currentQr).toBe(first);
+    expect(emulator.connectionState).toBe("connecting");
+    emulator.simulateConnectionClose();
+    expect(emulator.connectionState).toBe("close");
+    expect(emulator.currentQr).toBeNull();
+
+    // Also via generic connection update with close.
+    const second = emulator.simulateQr("qr-second");
+    expect(emulator.currentQr).toBe(second);
+    emulator.simulateConnectionUpdate({ connection: "close" });
+    expect(emulator.currentQr).toBeNull();
   });
 
   it("handleWebhook returns 501 (Baileys is socket-driven)", async () => {
@@ -202,6 +219,96 @@ describe("emulated baileys platform connection", () => {
     // Not routed via surface; call adapter directly.
     const res = await platform.adapter.handleWebhook(new Request("https://example.test/"), {});
     expect(res.status).toBe(501);
+  });
+});
+
+describe("emulated baileys platform queued inbound", () => {
+  it("queues simulateInbound before attach and resolves only after delivery", async () => {
+    const emulator = new BaileysEmulator();
+    const pending = emulator.simulateInbound({
+      from: "15551234567@s.whatsapp.net",
+      content: "queued hello",
+      handle: "h-queued-1",
+    });
+
+    let resolved = false;
+    void pending.then(() => {
+      resolved = true;
+    });
+
+    // Flush microtasks — pending must remain unresolved before attach.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    const surface = new ChatSdkMessagingSurface([createEmulatedBaileysPlatform(emulator)]);
+    const events: MessagingInboundEvent[] = [];
+    surface.onInbound(async (event) => {
+      events.push(event);
+    });
+
+    await (surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }).chat.ensureInitialized();
+
+    // _attach has been called; delivery is in flight but not yet settled before pending resolves.
+    // Pending must still encapsulate the real delivery completion.
+    await pending;
+    expect(resolved).toBe(true);
+    expect(events).toHaveLength(1);
+    expect((events[0] as unknown as { threadId: string }).threadId.startsWith("baileys:")).toBe(true);
+  });
+
+  it("preserves order for multiple queued inbounds", async () => {
+    const emulator = new BaileysEmulator();
+    const p1 = emulator.simulateInbound({
+      from: "15551234567@s.whatsapp.net",
+      content: "first",
+      handle: "h-q-1",
+    });
+    const p2 = emulator.simulateInbound({
+      from: "15551234567@s.whatsapp.net",
+      content: "second",
+      handle: "h-q-2",
+    });
+
+    const surface = new ChatSdkMessagingSurface([createEmulatedBaileysPlatform(emulator)]);
+    const events: MessagingInboundEvent[] = [];
+    surface.onInbound(async (event) => {
+      events.push(event);
+    });
+
+    await (surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }).chat.ensureInitialized();
+
+    await Promise.all([p1, p2]);
+    expect(events).toHaveLength(2);
+    expect((events[0] as unknown as { content: string }).content).toBe("first");
+    expect((events[1] as unknown as { content: string }).content).toBe("second");
+  });
+
+  it("rejects queued simulateInbound when delivery fails instead of unhandled rejection", async () => {
+    const emulator = new BaileysEmulator();
+    const pending = emulator.simulateInbound({
+      from: "15551234567@s.whatsapp.net",
+      content: "will fail",
+      handle: "h-queued-fail",
+    });
+
+    const surface = new ChatSdkMessagingSurface([createEmulatedBaileysPlatform(emulator)]);
+    surface.onInbound(async () => {});
+
+    const chat = (surface as unknown as { chat: { processMessage: unknown; ensureInitialized: () => Promise<void> } }).chat as unknown as {
+      processMessage: (...args: unknown[]) => unknown;
+      ensureInitialized: () => Promise<void>;
+    };
+    const original = chat.processMessage;
+    chat.processMessage = () => {
+      throw new Error("inject boom");
+    };
+
+    await chat.ensureInitialized();
+
+    await expect(pending).rejects.toThrow("inject boom");
+
+    chat.processMessage = original;
   });
 });
 
