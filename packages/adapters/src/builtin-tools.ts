@@ -141,25 +141,6 @@ export const builtinAgentTools: ConnectorTool[] = [
     },
   },
   {
-    name: "ask_user",
-    description:
-      "Ask the user one short multiple-choice question with tappable options, then wait for their selection. Use this instead of asking them to type when two to four concise choices are enough.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        question: { type: "string", maxLength: 240 },
-        options: {
-          type: "array",
-          items: { type: "string", minLength: 1, maxLength: 80 },
-          minItems: 2,
-          maxItems: 4,
-          uniqueItems: true,
-        },
-      },
-      required: ["question", "options"],
-    },
-  },
-  {
     name: "request_secret",
     description:
       "Collect a one-shot OTP, password, or API key in a masked field that never reaches the chat transcript or model. For website logins, CAPTCHA, passkeys, or anything that needs the live desktop, call request_takeover instead.",
@@ -631,22 +612,21 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
 ];
 
-/** Agent-connection tools, exposed only when the messaging surface is enabled. */
+/** Agent-connection tools, exposed only when the phone surface is enabled. */
 export const agentConnectionTools: ConnectorTool[] = [
   {
     name: "connect_agent",
     description:
-      "Request a standing connection to another person's agent by their owner's chat address. The other owner must approve before either agent can message the other. Only for agents whose owner messaged the deployment's chat line.",
+      "Request a standing connection to another person's agent by their phone number. The other owner must approve before either agent can message the other. Only for agents whose owner texted the deployment's phone line.",
     inputSchema: {
       type: "object",
       properties: {
-        address: {
+        phone: {
           type: "string",
-          description:
-            "The owner's address on the chat surface: an E.164 phone number (e.g. +15551234567) or platform user id.",
+          description: "E.164 phone number of the agent's owner, e.g. +15551234567.",
         },
       },
-      required: ["address"],
+      required: ["phone"],
     },
   },
   {
@@ -668,14 +648,13 @@ export const agentConnectionTools: ConnectorTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        address: {
+        phone: {
           type: "string",
-          description:
-            "Chat address (phone number or platform user id) of the connected agent's owner.",
+          description: "E.164 phone number of the connected agent's owner.",
         },
         message: { type: "string", description: "What to send." },
       },
-      required: ["address", "message"],
+      required: ["phone", "message"],
     },
   },
 ];

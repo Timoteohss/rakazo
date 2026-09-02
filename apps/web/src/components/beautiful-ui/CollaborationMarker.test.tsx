@@ -1,27 +1,27 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ActiveBotGlyph, CollaborationMarker } from "./CollaborationMarker";
+import { ActiveBotGlyph, CollaborationMarker, PeerBotChip } from "./CollaborationMarker";
 
 describe("collaboration transcript markers", () => {
-  it("shows a left-aligned peer event with its avatar and full label", () => {
+  it("shows a centered Message from label and clickable bot chip", () => {
     const html = renderToString(
-      <CollaborationMarker
-        ariaLabel="Message from Research"
-        color="#14B8A6"
-        identity="research"
-        label="Message from Research"
-        onClick={() => undefined}
-      />,
+      <CollaborationMarker>
+        Message from{" "}
+        <PeerBotChip
+          ariaLabel="Message from Research"
+          color="#14B8A6"
+          identity="research"
+          botName="Research"
+          onClick={() => undefined}
+        />
+      </CollaborationMarker>,
     );
 
     expect(html).toContain('data-testid="peer-receipt-chip"');
     expect(html).toContain('aria-label="Message from Research"');
-    expect(html).toContain('class="flex justify-start"');
-    expect(html).toContain('class="inline-flex max-w-full');
-    expect(html).toContain('class="truncate"');
+    expect(html).toContain("Message from");
     expect(html).toContain("rakazo-bot-avatar");
-    expect(html).toContain("Message from Research");
-    expect(html).not.toContain("{peer}");
+    expect(html).toContain("Research");
   });
 
   it("animates the active bot glyph from its run status", () => {

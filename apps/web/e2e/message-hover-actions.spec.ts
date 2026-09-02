@@ -9,7 +9,7 @@ test("message hover shows Reply and Copy; reply links to parent", async ({ page 
 
   const parentText = `hover-parent-${stamp}`;
   const replyText = `hover-reply-${stamp}`;
-  const composer = page.getByRole("combobox", { name: /^Message/ });
+  const composer = page.getByRole("textbox", { name: /^Message/ });
   await expect(composer).toBeVisible();
   await composer.fill(parentText);
   await composer.press("Enter");
@@ -106,7 +106,7 @@ test("reply preview jumps to parent outside the loaded page", async ({ page }) =
 
   const parentText = `page-parent-${stamp}`;
   const replyText = `page-reply-${stamp}`;
-  const composer = page.getByRole("combobox", { name: /^Message/ });
+  const composer = page.getByRole("textbox", { name: /^Message/ });
   await expect(composer).toBeVisible();
   await composer.fill(parentText);
   await composer.press("Enter");
@@ -169,7 +169,7 @@ test("reply preview jumps to parent outside the loaded page", async ({ page }) =
   });
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("combobox", { name: /^Message/ })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("textbox", { name: /^Message/ })).toBeVisible({ timeout: 20_000 });
   await expect(page.locator(`[data-message-id="${parentId}"]`)).toHaveCount(0);
   const offlinePreview = page
     .locator(`[data-message-id]`)

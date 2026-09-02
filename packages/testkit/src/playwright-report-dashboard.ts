@@ -386,7 +386,6 @@ export function renderScreenshotGallery(input: {
       screenshot.comparison === "changed" ||
       screenshot.comparison === "new",
   ).length;
-  const defaultFilter = !input.baselineAvailable ? "all" : counts.new > 0 ? "new" : "review";
   const screenshots = input.screenshots
     .map((screenshot, index) => {
       const imageUrl = new URL(screenshot.fileName, galleryBaseUrl).toString();
@@ -519,9 +518,9 @@ export function renderScreenshotGallery(input: {
     ${
       screenshots
         ? `<nav class="filters" aria-label="Screenshot filters">
-      <button class="filter" type="button" data-filter="all" aria-pressed="${String(defaultFilter === "all")}">All (${input.screenshots.length})</button>
-      <button class="filter" type="button" data-filter="review" aria-pressed="${String(defaultFilter === "review")}">Review changes (${reviewCount})</button>
-      <button class="filter" type="button" data-filter="new" aria-pressed="${String(defaultFilter === "new")}" ${input.baselineAvailable ? "" : "disabled"}>New (${counts.new})</button>
+      <button class="filter" type="button" data-filter="all" aria-pressed="${String(!input.baselineAvailable)}">All (${input.screenshots.length})</button>
+      <button class="filter" type="button" data-filter="review" aria-pressed="${String(input.baselineAvailable)}">Review changes (${reviewCount})</button>
+      <button class="filter" type="button" data-filter="new" aria-pressed="false" ${input.baselineAvailable ? "" : "disabled"}>New (${counts.new})</button>
       <button class="filter" type="button" data-filter="changed" aria-pressed="false" ${input.baselineAvailable ? "" : "disabled"}>Changed (${counts.changed})</button>
       <button class="filter" type="button" data-filter="failed" aria-pressed="false">Failed (${counts.failed})</button>
     </nav>`
@@ -579,7 +578,7 @@ export function renderScreenshotGallery(input: {
       if (filterEmpty) filterEmpty.hidden = visible !== 0;
     }
 
-    setFilter(${JSON.stringify(defaultFilter)});
+    setFilter(${JSON.stringify(input.baselineAvailable ? "review" : "all")});
     for (const filter of filters) {
       filter.addEventListener("click", () => setFilter(filter.dataset.filter));
     }

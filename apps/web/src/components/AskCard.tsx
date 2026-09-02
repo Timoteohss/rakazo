@@ -2,7 +2,7 @@ import { t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type { ThreadMessage } from "@rakazo/contracts";
-import { isApprovalAskBlock, isSecretAskBlock, selectedAskActionLabel } from "@rakazo/core";
+import { isApprovalAskBlock, isSecretAskBlock } from "@rakazo/core";
 import { useState } from "react";
 
 export type AskBlock = Extract<ThreadMessage["blocks"][number], { kind: "ask" }>;
@@ -12,11 +12,10 @@ function formatAnsweredState(
   approval: boolean,
   secret: boolean,
   outcome?: "created" | "cancelled",
-  actions?: AskBlock["actions"],
 ): string {
   if (secret) return t`Submitted`;
   if (!answer) return t`Answered`;
-  if (!approval) return t`Answered: ${selectedAskActionLabel(answer, actions)}`;
+  if (!approval) return t`Answered: ${answer}`;
   if (outcome === "created") return t`Created`;
   if (outcome === "cancelled") return t`Cancelled`;
   if (answer === "allow") return t`Allowed once`;
@@ -54,7 +53,6 @@ export function AskCard({
   const [error, setError] = useState<string | null>(null);
   const submitting = pendingAction !== null;
   const approvalActions = isApprovalAskBlock(block) ? block.actions : undefined;
-  const askActions = block.actions;
   const secretInput = isSecretAskBlock(block);
 
   async function submitAnswer(value: string) {
@@ -89,33 +87,30 @@ export function AskCard({
             Boolean(approvalActions),
             secretInput,
             approvalActions?.find((action) => action.id === block.answer)?.outcome,
-            askActions,
           )}
         </div>
       ) : !canAnswer ? (
         <div className="mt-3.5 text-[13.5px] font-medium text-[#85858A]">
           <Trans>No longer active</Trans>
         </div>
-      ) : askActions?.length ? (
-        <div className="mt-3.5 flex flex-wrap gap-2">
-          {askActions.map((action) => (
+      ) : approvalActions ? (
+        <div className="mt-3.5 flex gap-2">
+          {approvalActions.map((action) => (
             <button
               key={action.id}
               type="button"
               disabled={submitting}
               onClick={() => void submitAnswer(action.id)}
               className={
-                approvalActions && action.id === "allow"
+                action.id === "allow"
                   ? "rounded-[11px] bg-[#F1F1EF] px-[17px] py-2 text-[14.5px] font-medium text-[#17171A] disabled:opacity-50"
                   : "rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14.5px] text-[#C9C9CE] disabled:opacity-50"
               }
             >
               {pendingAction === action.id ? (
                 <Trans>Sending…</Trans>
-              ) : approvalActions ? (
-                approvalActionLabel(action.id, action.label, action.outcome)
               ) : (
-                action.label
+                approvalActionLabel(action.id, action.label, action.outcome)
               )}
             </button>
           ))}
@@ -201,7 +196,7 @@ export function AskCard({
           </button>
         </div>
       )}
-      {error ? <p className="mt-3 text-[13px] text-[#EF4444]">{error}</p> : null}
+      {error ? <p className="mt-3 text-[13px] text-[#E65707]">{error}</p> : null}
     </div>
   );
 }

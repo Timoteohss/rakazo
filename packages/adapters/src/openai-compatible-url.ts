@@ -25,8 +25,7 @@ export function normalizeOpenAiCompatibleBaseUrl(raw: string): string {
     throw new Error("Base URL must not contain credentials");
   }
   let path = url.pathname.replace(/\/+$/, "") || "";
-  const VERSIONED_API_ROOT = /\/v\d+$/;
-  if (!VERSIONED_API_ROOT.test(path)) {
+  if (!path.endsWith("/v1")) {
     path = path ? `${path}/v1` : "/v1";
   }
   return `${url.origin}${path}`;

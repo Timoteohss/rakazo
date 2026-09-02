@@ -18,7 +18,6 @@ import { useAvatarStyle } from "../components/avatar-style";
 import { BotAvatar } from "../components/bot-avatar";
 import type { MobileBot } from "../lib/api";
 import {
-  changePassword as changeAccountPassword,
   currentApiBase,
   deleteAccount,
   loadSessionToken,
@@ -55,11 +54,6 @@ export default function Account() {
   const [notificationPending, setNotificationPending] = useState(false);
   const [notificationError, setNotificationError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [passwordConfirmation, setPasswordConfirmation] = useState("");
-  const [passwordPending, setPasswordPending] = useState(false);
-  const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
   const [archivedBots, setArchivedBots] = useState<MobileBot[]>([]);
   const [usage, setUsage] = useState<{
     runs: number;
@@ -136,26 +130,6 @@ export default function Account() {
     }
   }
 
-  async function handlePasswordChange() {
-    if (newPassword !== passwordConfirmation) {
-      setPasswordMessage("Passwords do not match");
-      return;
-    }
-    setPasswordPending(true);
-    setPasswordMessage(null);
-    try {
-      await changeAccountPassword(currentPassword, newPassword);
-      setCurrentPassword("");
-      setNewPassword("");
-      setPasswordConfirmation("");
-      setPasswordMessage("Password updated");
-    } catch (cause) {
-      setPasswordMessage(cause instanceof Error ? cause.message : "Could not change password");
-    } finally {
-      setPasswordPending(false);
-    }
-  }
-
   async function updateNotifications(next: LiveNotificationSettings) {
     const previous = notifications;
     setNotifications(next);
@@ -221,45 +195,6 @@ export default function Account() {
           {me?.email ? <Text style={styles.email}>{me.email}</Text> : null}
         </View>
         {focus !== "usage" ? usageBlock : null}
-
-        <View accessibilityLabel="Password" style={styles.profile}>
-          <Text style={styles.settingsTitle}>Password</Text>
-          <AccountPasswordInput
-            label="Current password"
-            value={currentPassword}
-            onChange={setCurrentPassword}
-            autoComplete="current-password"
-          />
-          <AccountPasswordInput
-            label="New password"
-            value={newPassword}
-            onChange={setNewPassword}
-            autoComplete="new-password"
-          />
-          <AccountPasswordInput
-            label="Confirm password"
-            value={passwordConfirmation}
-            onChange={setPasswordConfirmation}
-            autoComplete="new-password"
-          />
-          {passwordMessage ? <Text style={styles.passwordMessage}>{passwordMessage}</Text> : null}
-          <Pressable
-            accessibilityRole="button"
-            disabled={passwordPending || !currentPassword || newPassword.length < 8}
-            onPress={() => void handlePasswordChange()}
-            style={({ pressed }) => [
-              styles.changePasswordButton,
-              (passwordPending || !currentPassword || newPassword.length < 8) && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-          >
-            {passwordPending ? (
-              <ActivityIndicator color={native.label} />
-            ) : (
-              <Text style={styles.changePasswordLabel}>Change password</Text>
-            )}
-          </Pressable>
-        </View>
 
         <View accessibilityLabel="Avatar style" style={styles.avatarSection}>
           <Text style={styles.settingsTitle}>Avatars</Text>
@@ -507,33 +442,6 @@ function NotificationSwitch({
   );
 }
 
-function AccountPasswordInput({
-  label,
-  value,
-  onChange,
-  autoComplete,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  autoComplete: "current-password" | "new-password";
-}) {
-  return (
-    <TextInput
-      accessibilityLabel={label}
-      autoCapitalize="none"
-      autoComplete={autoComplete}
-      autoCorrect={false}
-      onChangeText={onChange}
-      placeholder={label}
-      placeholderTextColor={native.tertiaryLabel}
-      secureTextEntry
-      style={styles.accountPassword}
-      value={value}
-    />
-  );
-}
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -649,32 +557,6 @@ const styles = StyleSheet.create({
     color: native.secondaryLabel,
     fontSize: 13,
     marginTop: 3,
-  },
-  accountPassword: {
-    minHeight: 46,
-    borderRadius: 12,
-    backgroundColor: native.fillPressed,
-    color: native.label,
-    paddingHorizontal: 14,
-    marginTop: 8,
-  },
-  passwordMessage: {
-    color: native.secondaryLabel,
-    fontSize: 13,
-    marginTop: 8,
-  },
-  changePasswordButton: {
-    minHeight: 44,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: native.fillPressed,
-    marginTop: 10,
-  },
-  changePasswordLabel: {
-    color: native.label,
-    fontSize: 15,
-    fontWeight: "600",
   },
   chevron: {
     color: native.secondaryLabel,
