@@ -15,7 +15,9 @@ const context: AdapterContext = {
 async function ensureChatReady(surface: ChatSdkMessagingSurface): Promise<void> {
   // openDirectThread on baileys bypasses ensureInitialized via directThreadId,
   // so force Chat initialization explicitly for socket-path inbound tests.
-  await (surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }).chat.ensureInitialized();
+  await (
+    surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }
+  ).chat.ensureInitialized();
 }
 
 function createHarness() {
@@ -55,7 +57,11 @@ describe("emulated baileys platform inbound", () => {
     });
 
     // DM thread id matches what outbound resolution would open.
-    const dmThreadId = await surface.openDirectThread("baileys", "15551234567@s.whatsapp.net", context);
+    const dmThreadId = await surface.openDirectThread(
+      "baileys",
+      "15551234567@s.whatsapp.net",
+      context,
+    );
     expect((events[0] as { threadId: string }).threadId).toBe(dmThreadId);
   });
 
@@ -105,11 +111,17 @@ describe("emulated baileys platform inbound", () => {
 describe("emulated baileys platform outbound", () => {
   it("sends a DM through openDirectThread + sendToThread", async () => {
     const { emulator, surface } = createHarness();
-    const threadId = await surface.openDirectThread("baileys", "15557654321@s.whatsapp.net", context);
+    const threadId = await surface.openDirectThread(
+      "baileys",
+      "15557654321@s.whatsapp.net",
+      context,
+    );
     const sent = await surface.sendToThread({ threadId, body: "hello you" }, context);
 
     expect(sent.handle).toMatch(/^baileys-handle-/);
-    expect(emulator.sent).toEqual([{ kind: "dm", jid: "15557654321@s.whatsapp.net", body: "hello you", handle: sent.handle }]);
+    expect(emulator.sent).toEqual([
+      { kind: "dm", jid: "15557654321@s.whatsapp.net", body: "hello you", handle: sent.handle },
+    ]);
   });
 
   it("posts to a group via the thread id captured from an inbound group event", async () => {
@@ -127,12 +139,18 @@ describe("emulated baileys platform outbound", () => {
 
     const sent = await surface.sendToThread({ threadId, body: "hi all" }, context);
 
-    expect(emulator.sent).toEqual([{ kind: "group", jid: "120363025@g.us", body: "hi all", handle: sent.handle }]);
+    expect(emulator.sent).toEqual([
+      { kind: "group", jid: "120363025@g.us", body: "hi all", handle: sent.handle },
+    ]);
   });
 
   it("rejects the send when the fake socket fails", async () => {
     const { emulator, surface } = createHarness();
-    const threadId = await surface.openDirectThread("baileys", "15557654321@s.whatsapp.net", context);
+    const threadId = await surface.openDirectThread(
+      "baileys",
+      "15557654321@s.whatsapp.net",
+      context,
+    );
     emulator.failNextSends(1);
 
     await expect(surface.sendToThread({ threadId, body: "will fail" }, context)).rejects.toThrow();
@@ -247,14 +265,18 @@ describe("emulated baileys platform queued inbound", () => {
       events.push(event);
     });
 
-    await (surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }).chat.ensureInitialized();
+    await (
+      surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }
+    ).chat.ensureInitialized();
 
     // _attach has been called; delivery is in flight but not yet settled before pending resolves.
     // Pending must still encapsulate the real delivery completion.
     await pending;
     expect(resolved).toBe(true);
     expect(events).toHaveLength(1);
-    expect((events[0] as unknown as { threadId: string }).threadId.startsWith("baileys:")).toBe(true);
+    expect((events[0] as unknown as { threadId: string }).threadId.startsWith("baileys:")).toBe(
+      true,
+    );
   });
 
   it("preserves order for multiple queued inbounds", async () => {
@@ -276,7 +298,9 @@ describe("emulated baileys platform queued inbound", () => {
       events.push(event);
     });
 
-    await (surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }).chat.ensureInitialized();
+    await (
+      surface as unknown as { chat: { ensureInitialized: () => Promise<void> } }
+    ).chat.ensureInitialized();
 
     await Promise.all([p1, p2]);
     expect(events).toHaveLength(2);
@@ -295,7 +319,11 @@ describe("emulated baileys platform queued inbound", () => {
     const surface = new ChatSdkMessagingSurface([createEmulatedBaileysPlatform(emulator)]);
     surface.onInbound(async () => {});
 
-    const chat = (surface as unknown as { chat: { processMessage: unknown; ensureInitialized: () => Promise<void> } }).chat as unknown as {
+    const chat = (
+      surface as unknown as {
+        chat: { processMessage: unknown; ensureInitialized: () => Promise<void> };
+      }
+    ).chat as unknown as {
       processMessage: (...args: unknown[]) => unknown;
       ensureInitialized: () => Promise<void>;
     };
@@ -318,6 +346,8 @@ describe("emulated baileys platform capabilities", () => {
     // Trigger init so surface has platform info
     await surface.openDirectThread("baileys", "15551234567@s.whatsapp.net", context);
     const descriptors = surface.platforms();
-    expect(descriptors).toEqual([{ provider: "baileys", capabilities: { direct: true, groups: true, typing: false } }]);
+    expect(descriptors).toEqual([
+      { provider: "baileys", capabilities: { direct: true, groups: true, typing: false } },
+    ]);
   });
 });

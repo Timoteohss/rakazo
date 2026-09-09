@@ -1,4 +1,11 @@
-import type { Adapter, AdapterPostableMessage, ChatInstance, FetchOptions, FetchResult, Message } from "chat";
+import type {
+  Adapter,
+  AdapterPostableMessage,
+  ChatInstance,
+  FetchOptions,
+  FetchResult,
+  Message,
+} from "chat";
 import { Message as ChatMessage } from "chat";
 
 /**
@@ -218,14 +225,17 @@ export class BaileysEmulator {
     const adapter = this.adapterRef!;
     const chat = this.chat!;
     // Ensure state is connected before processing (off-webhook socket path).
-    const maybeInit = (chat as unknown as { ensureInitialized?: () => Promise<void> }).ensureInitialized;
+    const maybeInit = (chat as unknown as { ensureInitialized?: () => Promise<void> })
+      .ensureInitialized;
     if (maybeInit) await maybeInit.call(chat);
     const handle = input.handle ?? this.nextHandle();
 
-
     // Resolve JIDs.
     const senderJid = normalizeJid(input.from);
-    const isGroup = Boolean(input.groupJid) || (input.participants && input.participants.length > 0 && input.groupJid !== undefined) || isGroupJid(senderJid) === false && input.groupJid !== undefined;
+    const isGroup =
+      Boolean(input.groupJid) ||
+      (input.participants && input.participants.length > 0 && input.groupJid !== undefined) ||
+      (isGroupJid(senderJid) === false && input.groupJid !== undefined);
     // Canonical thread JID is groupJid for groups, sender JID for DMs.
     const threadJid = input.groupJid ? normalizeJid(input.groupJid) : senderJid;
     // For groups, ensure JID ends with @g.us.
@@ -269,11 +279,16 @@ export class BaileysEmulator {
     const threadId = adapter.encodeThreadId({ jid: canonicalThreadJid });
 
     // Use the Chat SDK's processMessage path that BaileysAdapter uses for messages.upsert.
-    const maybePromise = (chat as unknown as { processMessage: (adapter: Adapter, threadId: string, factory: () => Message, opts?: unknown) => unknown }).processMessage(
-      adapter as unknown as Adapter,
-      threadId,
-      () => adapter.parseMessage(raw),
-    );
+    const maybePromise = (
+      chat as unknown as {
+        processMessage: (
+          adapter: Adapter,
+          threadId: string,
+          factory: () => Message,
+          opts?: unknown,
+        ) => unknown;
+      }
+    ).processMessage(adapter as unknown as Adapter, threadId, () => adapter.parseMessage(raw));
     if (maybePromise && typeof (maybePromise as Promise<unknown>).then === "function") {
       await (maybePromise as Promise<unknown>);
     }
@@ -344,7 +359,8 @@ export class BaileysFakeAdapter {
   async handleWebhook(_request: Request, _options?: unknown): Promise<Response> {
     return new Response(
       JSON.stringify({
-        error: "Baileys adapter does not use HTTP webhooks. Inbound arrives via socket messages.upsert.",
+        error:
+          "Baileys adapter does not use HTTP webhooks. Inbound arrives via socket messages.upsert.",
       }),
       { status: 501, headers: { "Content-Type": "application/json" } },
     );
@@ -370,7 +386,8 @@ export class BaileysFakeAdapter {
     const jid = r.key.remoteJid;
     const threadId = this.encodeThreadId({ jid });
     const senderJid = meta?.senderJid ?? r.key.participant ?? jid;
-    const content = meta?.content ?? r.message?.conversation ?? r.message?.extendedTextMessage?.text ?? "";
+    const content =
+      meta?.content ?? r.message?.conversation ?? r.message?.extendedTextMessage?.text ?? "";
     const pushName = r.pushName ?? senderJid.split("@")[0] ?? senderJid;
     // Author is the sender for both DM and group.
     const authorUserId = senderJid;
@@ -378,7 +395,10 @@ export class BaileysFakeAdapter {
       id: r.key.id ?? meta?.handle ?? `msg-${Date.now()}`,
       threadId,
       text: content,
-      formatted: { type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: content }]}]} as unknown as never,
+      formatted: {
+        type: "root",
+        children: [{ type: "paragraph", children: [{ type: "text", value: content }] }],
+      } as unknown as never,
       raw: r,
       author: {
         userId: authorUserId,
@@ -404,9 +424,19 @@ export class BaileysFakeAdapter {
     const { jid } = this.decodeThreadId(threadId);
     let text = "";
     if (typeof message === "string") text = message;
-    else if (message && typeof message === "object" && "text" in message && typeof (message as { text?: unknown }).text === "string") {
+    else if (
+      message &&
+      typeof message === "object" &&
+      "text" in message &&
+      typeof (message as { text?: unknown }).text === "string"
+    ) {
       text = (message as { text: string }).text;
-    } else if (message && typeof message === "object" && "raw" in message && typeof (message as { raw?: unknown }).raw === "string") {
+    } else if (
+      message &&
+      typeof message === "object" &&
+      "raw" in message &&
+      typeof (message as { raw?: unknown }).raw === "string"
+    ) {
       text = (message as { raw: string }).raw;
     }
     const handle = this.emulator._recordSend(jid, text);
@@ -418,7 +448,10 @@ export class BaileysFakeAdapter {
     };
   }
 
-  async postChannelMessage(channelId: string, message: AdapterPostableMessage): Promise<{ id: string; threadId: string; raw: unknown }> {
+  async postChannelMessage(
+    channelId: string,
+    message: AdapterPostableMessage,
+  ): Promise<{ id: string; threadId: string; raw: unknown }> {
     return this.postMessage(channelId, message);
   }
 
@@ -438,17 +471,28 @@ export class BaileysFakeAdapter {
     return { messages: [] as unknown as Message<unknown>[] };
   }
 
-  async fetchThread(threadId: string): Promise<{ id: string; channelId: string; isDM: boolean; metadata: Record<string, unknown> }> {
+  async fetchThread(
+    threadId: string,
+  ): Promise<{ id: string; channelId: string; isDM: boolean; metadata: Record<string, unknown> }> {
     const { jid } = this.decodeThreadId(threadId);
     return { id: threadId, channelId: threadId, isDM: !isGroupJid(jid), metadata: { jid } };
   }
 
-  async fetchChannelInfo(channelId: string): Promise<{ id: string; name?: string; isDM: boolean; memberCount?: number; metadata: Record<string, unknown> }> {
+  async fetchChannelInfo(channelId: string): Promise<{
+    id: string;
+    name?: string;
+    isDM: boolean;
+    memberCount?: number;
+    metadata: Record<string, unknown>;
+  }> {
     const { jid } = this.decodeThreadId(channelId);
     return { id: channelId, isDM: !isGroupJid(jid), metadata: { jid } };
   }
 
-  async fetchChannelMessages(_channelId: string, _options?: FetchOptions): Promise<FetchResult<unknown>> {
+  async fetchChannelMessages(
+    _channelId: string,
+    _options?: FetchOptions,
+  ): Promise<FetchResult<unknown>> {
     return { messages: [] as unknown as Message<unknown>[] };
   }
 

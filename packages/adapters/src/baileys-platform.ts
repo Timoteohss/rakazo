@@ -1,6 +1,6 @@
-import type { MessagingPlatform } from "./chat-sdk-surface.js";
 import type { BaileysEmulator } from "./baileys-emulator.js";
 import { createBaileysFakeAdapter } from "./baileys-emulator.js";
+import type { MessagingPlatform } from "./chat-sdk-surface.js";
 
 /**
  * Build the "baileys" MessagingPlatform from the emulator's fake socket.
@@ -27,7 +27,9 @@ export function createEmulatedBaileysPlatform(emulator: BaileysEmulator): Messag
  * the emulated path above.
  */
 export function createBaileysPlatformFromRealAdapter(_auth: unknown): never {
-  throw new Error("Real Baileys socket wiring is step 3 — use createEmulatedBaileysPlatform for tests");
+  throw new Error(
+    "Real Baileys socket wiring is step 3 — use createEmulatedBaileysPlatform for tests",
+  );
 }
 
 function normalizeForDirect(address: string): string {
@@ -44,12 +46,16 @@ function baileysParticipants(raw: unknown, selfJid: string): string[] {
     const meta = (maybe._emulatorMeta as Record<string, unknown> | null) ?? null;
     const list = meta?.participants;
     if (Array.isArray(list)) {
-      return list.filter((entry): entry is string => typeof entry === "string" && entry !== selfJid);
+      return list.filter(
+        (entry): entry is string => typeof entry === "string" && entry !== selfJid,
+      );
     }
   }
   const participants = (maybe as { participants?: unknown }).participants;
   if (Array.isArray(participants)) {
-    return participants.filter((entry): entry is string => typeof entry === "string" && entry !== selfJid);
+    return participants.filter(
+      (entry): entry is string => typeof entry === "string" && entry !== selfJid,
+    );
   }
   return [];
 }
@@ -62,7 +68,9 @@ function baileysGroupName(raw: unknown): string | null {
     const name = meta?.groupSubject;
     return typeof name === "string" && name ? name : null;
   }
-  const candidate = (maybe as { groupSubject?: unknown; subject?: unknown; group_display_name?: unknown }).groupSubject;
+  const candidate = (
+    maybe as { groupSubject?: unknown; subject?: unknown; group_display_name?: unknown }
+  ).groupSubject;
   if (typeof candidate === "string" && candidate) return candidate;
   return null;
 }
