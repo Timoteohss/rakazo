@@ -6,8 +6,11 @@ import {
   type GroupMember,
   type SpaceGroup,
 } from "@rakazo/contracts";
+import { cancelRunsInTransaction } from "./cancel-runs.js";
 import type { Prisma, PrismaClient } from "./client.js";
+import { expireComputerExecutionLeases } from "./computers.js";
 import { IsolationError } from "./scope.js";
+import { lockSpaceForContentCreation } from "./spaces.js";
 import { activeRunSelection, activeRunStatuses, previewFromBlocks } from "./thread-listing.js";
 
 type GroupRecord = {
@@ -245,6 +248,10 @@ export function createGroupRepos(prisma: PrismaClient) {
     async createGroup(actor: Actor, input: { name: string; botIds: string[] }): Promise<Group> {
       const members = await assertOwnedBots(prisma, actor, input.botIds);
       const created = await prisma.$transaction(async (tx) => {
+        await lockSpaceForContentCreation(tx, {
+          spaceId: actor.spaceId,
+          userId: actor.userId,
+        });
         const group = await tx.chatGroup.create({
           data: {
             spaceId: actor.spaceId,
@@ -324,23 +331,7 @@ export function createGroupRepos(prisma: PrismaClient) {
           : [];
         if (activeRuns.length) {
           const now = new Date();
-          await tx.run.updateMany({
-            where: { id: { in: activeRuns.map((run) => run.id) } },
-            data: {
-              status: "cancelled",
-              completedAt: now,
-              leaseOwner: null,
-              leaseExpiresAt: null,
-            },
-          });
-          await tx.attempt.updateMany({
-            where: { runId: { in: activeRuns.map((run) => run.id) }, status: "running" },
-            data: { status: "cancelled", finishedAt: now },
-          });
-          await tx.task.updateMany({
-            where: { id: { in: activeRuns.map((run) => run.taskId) } },
-            data: { status: "cancelled" },
-          });
+          await cancelRunsInTransaction(tx, activeRuns, now);
         }
         if (input.name !== undefined) {
           await tx.chatGroup.update({
@@ -403,33 +394,30 @@ export function createGroupRepos(prisma: PrismaClient) {
           ? await tx.computer.findMany({
               where: { executionRunId: { in: runIds } },
               select: {
+                id: true,
                 homeKey: true,
                 kind: true,
                 providerRef: true,
                 executionBotId: true,
+                executionRunId: true,
               },
             })
           : [];
+        const leases = runIds.length
+          ? await tx.computerExecutionLease.findMany({
+              where: { runId: { in: runIds } },
+              select: { computerId: true, runId: true, fence: true },
+            })
+          : [];
+        const leaseByComputerId = new Map(leases.map((lease) => [lease.computerId, lease]));
+        const computersWithLease = computers.map((computer) => ({
+          ...computer,
+          executionFence: leaseByComputerId.get(computer.id)?.fence ?? 0,
+        }));
 
         if (runIds.length) {
-          await tx.run.updateMany({
-            where: { id: { in: runIds } },
-            data: {
-              status: "cancelled",
-              completedAt: now,
-              leaseOwner: null,
-              leaseExpiresAt: null,
-            },
-          });
-          await tx.attempt.updateMany({
-            where: { runId: { in: runIds }, status: "running" },
-            data: { status: "cancelled", finishedAt: now },
-          });
-          await tx.task.updateMany({
-            where: { id: { in: activeRuns.map((run) => run.taskId) } },
-            data: { status: "cancelled" },
-          });
-          await tx.computerExecutionLease.deleteMany({ where: { runId: { in: runIds } } });
+          await cancelRunsInTransaction(tx, activeRuns, now);
+          await expireComputerExecutionLeases(tx, { runId: { in: runIds } });
           await tx.computer.updateMany({
             where: { executionRunId: { in: runIds } },
             data: {
@@ -448,7 +436,7 @@ export function createGroupRepos(prisma: PrismaClient) {
           data: { archivedAt: now, pinned: false },
         });
 
-        return { cancelledRunIds: runIds, computers };
+        return { cancelledRunIds: runIds, computers: computersWithLease };
       });
     },
 

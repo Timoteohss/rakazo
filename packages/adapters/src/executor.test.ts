@@ -3,23 +3,194 @@ import { ONCE_ROUTINE_CRON } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import {
+  appendToolCompletionAudit,
   createRunExecutor,
+  createRunWorkspaceCheckpoint,
   loadCurrentTurnImages,
   missingTurnImagesInstruction,
   runNotificationsEnabled,
   selectBuiltinToolsForRun,
   settleSteeringAttachmentLoads,
   threadContextForRun,
+  toolCompletionAuditPayload,
+  toolCompletionFromResult,
 } from "./executor.js";
 
+describe("tool completion audit", () => {
+  it("records result metadata without persisting tool contents", () => {
+    const payload = toolCompletionAuditPayload({
+      name: "computer_observe",
+      executionId: "call-1",
+      durationMs: 12.6,
+      result: {
+        kind: "agent_tool_result",
+        content: [
+          { type: "text", text: "Visible window" },
+          { type: "image", data: "image-bytes", mimeType: "image/png" },
+        ],
+        details: {
+          frameId: "frame-1",
+          capturedAt: "2026-09-07T00:00:00.000Z",
+          width: 1280,
+          height: 720,
+          activeWindow: { title: "Private window" },
+        },
+      },
+    });
+
+    expect(payload).toEqual({
+      name: "computer_observe",
+      executionId: "call-1",
+      durationMs: 13,
+      outcome: "succeeded",
+      contentTypes: ["text", "image"],
+      frameId: "frame-1",
+      capturedAt: "2026-09-07T00:00:00.000Z",
+      width: 1280,
+      height: 720,
+    });
+    expect(payload).not.toHaveProperty("content");
+    expect(payload).not.toHaveProperty("activeWindow");
+  });
+
+  it("does not fail the run when the audit append fails", async () => {
+    const append = vi.fn().mockRejectedValue(new Error("database unavailable"));
+
+    await expect(
+      appendToolCompletionAudit(
+        { events: { append } },
+        { spaceId: "space-1", threadId: "thread-1", botId: "bot-1", runId: "run-1" },
+        {
+          name: "destination.write",
+          executionId: "call-1",
+          durationMs: 4,
+          error: new Error("Bearer secret-token"),
+        },
+        ["secret-token"],
+      ),
+    ).resolves.toBeUndefined();
+    expect(append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent.tool.completed",
+        payload: expect.objectContaining({
+          outcome: "error",
+          error: "Bearer [redacted]",
+        }),
+      }),
+    );
+  });
+
+  it("records rejected scripted tool results as errors", () => {
+    const completion = toolCompletionFromResult(
+      { name: "destination.write", executionId: "call-1", durationMs: 4 },
+      { error: "destination rejected the record" },
+    );
+
+    expect(completion).toEqual({
+      name: "destination.write",
+      executionId: "call-1",
+      durationMs: 4,
+      error: "destination rejected the record",
+      paused: false,
+    });
+    expect(toolCompletionAuditPayload(completion)).toMatchObject({
+      outcome: "error",
+      error: "destination rejected the record",
+    });
+    expect(completion).not.toHaveProperty("result");
+  });
+});
+
+describe("run workspace checkpoint", () => {
+  it("skips clean turns and flushes once after a mutation", async () => {
+    const persist = vi.fn(async () => undefined);
+    const checkpoint = createRunWorkspaceCheckpoint(persist);
+
+    await expect(checkpoint.flush()).resolves.toBe(false);
+    checkpoint.markDirty();
+    await expect(checkpoint.flush()).resolves.toBe(true);
+    await expect(checkpoint.flush()).resolves.toBe(false);
+    expect(persist).toHaveBeenCalledOnce();
+  });
+
+  it("marks materialized steering files for checkpointing", async () => {
+    const persist = vi.fn(async () => undefined);
+    const checkpoint = createRunWorkspaceCheckpoint(persist);
+
+    checkpoint.markFiles([]);
+    await expect(checkpoint.flush()).resolves.toBe(false);
+    checkpoint.markFiles([{ path: "attachments/result.txt" }]);
+    await expect(checkpoint.flush()).resolves.toBe(true);
+  });
+
+  it("keeps a failed checkpoint dirty for retry", async () => {
+    const persist = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("checkpoint failed"))
+      .mockResolvedValueOnce(undefined);
+    const checkpoint = createRunWorkspaceCheckpoint(persist);
+    checkpoint.markDirty();
+
+    await expect(checkpoint.flush()).rejects.toThrow("checkpoint failed");
+    await expect(checkpoint.flush()).resolves.toBe(true);
+    expect(persist).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("run tool selection", () => {
-  const toolNames = (trigger: string, groupId: string | null = null) =>
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])("gates page browsers (%s) independently of cloud agents (%s)", (page, cloud) => {
+    const names = selectBuiltinToolsForRun({
+      graphicalToolsAllowed: false,
+      pageBrowserAllowed: page,
+      cloudAgentEnabled: cloud,
+      groupId: null,
+      trigger: "message",
+      semanticMemoryEnabled: false,
+      messagingChannelRun: false,
+    }).map((tool) => tool.name);
+    expect(names.includes("browser_snapshot")).toBe(page);
+    expect(names.includes("cloud_agent_status")).toBe(cloud);
+    expect(names).not.toContain("computer_act");
+  });
+
+  const toolNames = (
+    trigger: string,
+    groupId: string | null = null,
+    options?: { graphicalToolsAllowed?: boolean; pageBrowserAllowed?: boolean },
+  ) =>
     selectBuiltinToolsForRun({
-      graphicalToolsAllowed: true,
+      graphicalToolsAllowed: options?.graphicalToolsAllowed ?? true,
+      pageBrowserAllowed: options?.pageBrowserAllowed ?? true,
       groupId,
       trigger,
       semanticMemoryEnabled: false,
+      messagingChannelRun: false,
     }).map((tool) => tool.name);
+
+  it("keeps page browser tools without vision, and hides them without a graphical computer", () => {
+    const withPage = toolNames("message", null, {
+      graphicalToolsAllowed: false,
+      pageBrowserAllowed: true,
+    });
+    expect(withPage).toEqual(
+      expect.arrayContaining(["browser_navigate", "browser_snapshot", "browser_act"]),
+    );
+    expect(withPage).not.toEqual(expect.arrayContaining(["computer_observe", "computer_act"]));
+
+    const withoutPage = toolNames("message", null, {
+      graphicalToolsAllowed: true,
+      pageBrowserAllowed: false,
+    });
+    expect(withoutPage).not.toEqual(
+      expect.arrayContaining(["browser_navigate", "browser_snapshot", "browser_act"]),
+    );
+    expect(withoutPage).toEqual(expect.arrayContaining(["computer_observe", "computer_act"]));
+  });
 
   it("withholds schedule creation only from routine-triggered runs", () => {
     expect(toolNames("routine")).not.toContain("schedule_create");
@@ -292,6 +463,38 @@ describe("run notification preference", () => {
 });
 
 describe("createRunExecutor", () => {
+  it("excludes private summaries and memory tools from group messaging runs", () => {
+    const messages = [{ role: "user", content: "Group request" }];
+    expect(
+      threadContextForRun(
+        "messaging",
+        {
+          messages,
+          summary: "Private test detail",
+          historyCompactedUpToSeq: 12,
+        },
+        true,
+      ),
+    ).toEqual({
+      messages,
+      summary: null,
+      historyCompactedUpToSeq: null,
+      includeSemanticRecall: false,
+    });
+    const tools = selectBuiltinToolsForRun({
+      graphicalToolsAllowed: false,
+      groupId: null,
+      trigger: "messaging",
+      semanticMemoryEnabled: true,
+      messagingChannelRun: true,
+    }).map((tool) => tool.name);
+    expect(tools).not.toContain("recall_memory");
+    expect(tools).not.toContain("remember");
+    expect(tools).not.toContain("save_memory");
+    expect(tools.some((tool) => tool.startsWith("scratchpad_"))).toBe(false);
+    expect(tools).toContain("web_fetch");
+  });
+
   it("isolates routine runs from every thread-history source", () => {
     const threadContext = {
       messages: [{ role: "user", content: "Create this routine" }],
@@ -299,13 +502,13 @@ describe("createRunExecutor", () => {
       historyCompactedUpToSeq: 4,
     };
 
-    expect(threadContextForRun("routine", threadContext)).toEqual({
+    expect(threadContextForRun("routine", threadContext, false)).toEqual({
       messages: [],
       summary: null,
       historyCompactedUpToSeq: null,
       includeSemanticRecall: false,
     });
-    expect(threadContextForRun("user", threadContext)).toEqual({
+    expect(threadContextForRun("user", threadContext, false)).toEqual({
       ...threadContext,
       includeSemanticRecall: true,
     });
@@ -773,6 +976,99 @@ description: Prepare standup notes
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
+  it("fails a run clearly without calling the real runtime when no model is configured", async () => {
+    let status = "queued";
+    const runtimeRun = vi.fn();
+    const finalizeRun = vi.fn(async () => {
+      status = "failed";
+      return { continuationRunId: null };
+    });
+    const run = {
+      id: "run-1",
+      botId: "bot-1",
+      threadId: "thread-1",
+      taskId: "task-1",
+      userId: "user-1",
+      spaceId: "ws-1",
+      status: "queued",
+      trigger: "user",
+      routineId: null,
+      sourceMessageId: null,
+      checkpoint: null,
+      leaseFence: 0,
+    };
+    const botLookup = vi.fn(async (args: { select?: { computerId?: boolean } }) =>
+      args.select?.computerId
+        ? { computerId: "computer-1", computerSwitching: false }
+        : {
+            id: "bot-1",
+            name: "Assistant",
+            modelProvider: null,
+            modelId: null,
+            thinkingLevel: null,
+            memoryScope: "isolated",
+            computer: { id: "computer-1", scope: "private" },
+          },
+    );
+    const prisma = {
+      run: {
+        findUnique: vi.fn(async () => run),
+        findUniqueOrThrow: vi.fn(async () => ({ status: "leased", startedAt: null })),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      bot: { findUniqueOrThrow: botLookup },
+      computer: {
+        findUniqueOrThrow: vi.fn(async () => ({ scope: "private", state: "running" })),
+      },
+      attempt: {
+        create: vi.fn(async () => ({ id: "attempt-1" })),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      thread: {
+        findUniqueOrThrow: vi.fn(async () => ({
+          id: "thread-1",
+          groupId: null,
+          historyCompactionSummary: null,
+          historyCompactedUpToSeq: null,
+          historyCompactionGeneration: 0,
+        })),
+      },
+      message: { findMany: vi.fn(async () => []) },
+      task: { findUniqueOrThrow: vi.fn(async () => ({ id: "task-1", prompt: "hello" })) },
+      connection: { findMany: vi.fn(async () => []) },
+      spaceModelPreference: { findFirst: vi.fn(async () => null) },
+      userModelCredential: { findFirst: vi.fn(async () => null) },
+      deploymentSettings: { findUnique: vi.fn(async () => null) },
+      taughtSkill: { findMany: vi.fn(async () => []) },
+      agentSecret: { findMany: vi.fn(async () => []) },
+      agentSkill: { findMany: vi.fn(async () => []) },
+      scratchpadItem: { findMany: vi.fn(async () => []) },
+    } as unknown as PrismaClient;
+    const executor = createRunExecutor({
+      prisma,
+      runtime: {
+        describe: () => ({ capabilities: { scripted: false } }),
+        run: runtimeRun,
+      },
+      memoryProviders: { resolve: vi.fn(async () => null) },
+      memory: { read: vi.fn(async () => ({ documents: [] })) },
+      events: { append: vi.fn(async () => undefined), finalizeRun },
+      jobs: { enqueue: vi.fn(async () => undefined) },
+      secrets: [],
+    } as unknown as Parameters<typeof createRunExecutor>[0]);
+
+    await executor.continueRun("run-1", "worker-1");
+
+    expect(status).toBe("failed");
+    expect(finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: "Connect a model in Settings before running bots.",
+      }),
+    );
+    expect(runtimeRun).not.toHaveBeenCalled();
+  });
+
   it("resolves a per-bot model override with that provider’s credential", async () => {
     const findFirst = vi.fn(
       async (args: { where: { credential?: { provider?: string }; isDefault?: boolean } }) => {
@@ -829,6 +1125,88 @@ description: Prepare standup notes
         where: expect.objectContaining({ credential: { provider: "xai" } }),
       }),
     );
+  });
+
+  it("resolves an explicit subagent model within the active user and space", async () => {
+    const preference = modelPreference({
+      provider: "xai",
+      secretId: "secret-xai",
+      modelId: "grok-4.6",
+      isDefault: false,
+    });
+    const findFirst = vi.fn(
+      async (args: { where: { credential?: { provider?: string }; modelId?: string } }) => {
+        if (args.where.credential?.provider !== "xai") return null;
+        if (args.where.modelId && args.where.modelId !== "grok-4.6") return null;
+        return preference;
+      },
+    );
+    const prisma = {
+      spaceModelPreference: { findFirst },
+      userModelCredential: { findFirst: vi.fn(async () => null) },
+      secret: { findFirst: vi.fn(async () => null), findUnique: vi.fn(async () => null) },
+    } as unknown as PrismaClient;
+    const executor = createRunExecutor({
+      prisma,
+      secretStore: { load: vi.fn(), put: vi.fn() },
+    } as unknown as Parameters<typeof createRunExecutor>[0]);
+
+    const model = await executor.resolveConnectedModel(
+      { userId: "user-1", spaceId: "ws-1" },
+      "xai",
+      "grok-4.6",
+    );
+
+    expect(model).toMatchObject({ provider: "xai", id: "grok-4.6", thinkingLevel: null });
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          spaceId: "ws-1",
+          userId: "user-1",
+          modelId: "grok-4.6",
+          credential: { provider: "xai" },
+        }),
+      }),
+    );
+  });
+
+  it("rejects a free-form selection when the owning preference disappears", async () => {
+    const preference = modelPreference({
+      provider: "openai-compatible",
+      secretId: "secret-compat",
+      modelId: "newest-model",
+      isDefault: true,
+    });
+    const findFirst = vi.fn(
+      async (args: {
+        where: { credential?: { provider?: string; userId?: string }; modelId?: string };
+        select?: unknown;
+      }) => {
+        if (args.select) {
+          return args.where.modelId === "private-model" ? { id: "saved" } : null;
+        }
+        if (args.where.modelId === "private-model") return null;
+        if (args.where.credential?.provider === "openai-compatible") return preference;
+        return null;
+      },
+    );
+    const prisma = {
+      spaceModelPreference: { findFirst },
+      userModelCredential: { findFirst: vi.fn(async () => null) },
+      secret: { findFirst: vi.fn(async () => null), findUnique: vi.fn(async () => null) },
+    } as unknown as PrismaClient;
+    const executor = createRunExecutor({
+      prisma,
+      secretStore: { load: vi.fn(), put: vi.fn() },
+    } as unknown as Parameters<typeof createRunExecutor>[0]);
+
+    await expect(
+      executor.resolveConnectedModel(
+        { userId: "user-1", spaceId: "ws-1" },
+        "openai-compatible",
+        "private-model",
+      ),
+    ).rejects.toThrow("Unknown model for that provider");
   });
 
   it("falls back to the Space default when the override provider has no credential", async () => {

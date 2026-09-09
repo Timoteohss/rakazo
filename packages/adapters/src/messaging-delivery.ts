@@ -9,6 +9,7 @@ import type { MessageBlock } from "@rakazo/contracts";
 import { botMessageHopExhausted, nextBotMessageHop } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { appendEventInTransaction, createThreadMessageInTransaction } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
 
 /**
  * Margin under vendor consecutive-outbound caps (sendblue enforces one hard):
@@ -71,14 +72,21 @@ async function mirrorRun(deps: MessagingDeliveryDeps, runId: string): Promise<vo
     where: { id: runId },
     include: { sourceMessage: true },
   });
-  if (run?.trigger !== "messaging") return;
-  const sourceBlocks = (run.sourceMessage?.blocks ?? []) as MessageBlock[];
-  const channelBlock = sourceBlocks.find(
-    (block): block is Extract<MessageBlock, { kind: "channel_message" }> =>
-      block.kind === "channel_message",
-  );
-  if (channelBlock) {
-    await mirrorChannelRun(deps, run, channelBlock);
+  if (!run) return;
+
+  if (run.trigger === "messaging") {
+    const sourceBlocks = (run.sourceMessage?.blocks ?? []) as MessageBlock[];
+    const channelBlock = sourceBlocks.find(
+      (block): block is Extract<MessageBlock, { kind: "channel_message" }> =>
+        block.kind === "channel_message",
+    );
+    if (channelBlock) {
+      await mirrorChannelRun(deps, run, channelBlock);
+      return;
+    }
+  } else if (run.trigger !== "bot_message") {
+    // Mirror inbound messaging runs and delegated bot_message replies only.
+    // Do not push in-app user/routine runs out to the linked chat.
     return;
   }
 
@@ -86,6 +94,9 @@ async function mirrorRun(deps: MessagingDeliveryDeps, runId: string): Promise<vo
     where: { botId: run.botId },
   });
   if (!identity) return;
+
+  // bot_message runs can carry the bot's user-facing reply after a delegate wake.
+  // extractText only keeps kind:"text", so inter-bot chatter blocks never leak out.
 
   const messages = await deps.prisma.message.findMany({
     where: { runId: run.id, role: "bot" },
@@ -131,12 +142,22 @@ async function mirrorChannelRun(
   const firstName = owner?.name.trim().split(/\s+/)[0] || "Owner";
   const fromLabel = `${firstName}'s agent`;
 
-  const messages = (
-    await deps.prisma.message.findMany({
-      where: { runId: run.id, role: "bot" },
-      orderBy: { seq: "asc" },
-    })
+  const replies = await deps.prisma.message.findMany({
+    select: { id: true, blocks: true },
+    where: { runId: run.id, role: "bot" },
+    orderBy: { seq: "asc" },
+  });
+  // Ask answers are entered privately in the app. Check the same snapshot as
+  // the replies so a resumed run cannot publish an answer-influenced response.
+  if (
+    replies.some((message) =>
+      (message.blocks as MessageBlock[]).some(
+        (block) => block.kind === "ask" && block.status === "answered",
+      ),
+    )
   )
+    return;
+  const messages = replies
     .map((message) => ({ message, text: extractText(message.blocks) }))
     .filter((entry) => entry.text);
   if (messages.length === 0) return;
@@ -178,6 +199,7 @@ async function mirrorChannelRun(
       const block: MessageBlock = {
         kind: "channel_message",
         provider: identity.provider,
+        ...(channelBlock.transport ? { transport: channelBlock.transport } : {}),
         channelId: channel.id,
         fromAddress: identity.address,
         fromLabel,
@@ -201,7 +223,7 @@ async function mirrorChannelRun(
         });
         if (sent.runId) {
           await deps.jobs.enqueue(runContinueJob(sent.runId)).catch((error) => {
-            console.error("messaging peer wake enqueue error", error);
+            getLogger().error("messaging peer wake enqueue error", error);
           });
         }
         continue;

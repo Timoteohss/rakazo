@@ -1,8 +1,8 @@
+import { workingAvatarDuration, workingAvatarFrame } from "@rakazo/core";
 import { describe, expect, it } from "vitest";
-import { workingAvatarDuration, workingAvatarFrame } from "./avatar-motion";
 
 describe("working avatar motion", () => {
-  it("loops cleanly while keeping identity-specific choreography", () => {
+  it("reuses shared core choreography", () => {
     const start = workingAvatarFrame(0, 0);
     const end = workingAvatarFrame(0, 1);
     expect(end.translationY).toBeCloseTo(start.translationY);

@@ -6,17 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BACKGROUND_WORK_LAUNCH,
   BACKGROUND_WORK_PROBE,
+  CANCEL_COMPUTER_RUN_WORK,
+  CANCEL_PRIMARY_BROWSER_WORK,
   DEFAULT_SANDBOX_IDLE_MS,
   sandboxIdleMs,
   sleepComputerIfIdle,
 } from "./computer-idle.js";
-import {
-  e2bCreateOptions,
-  isUnreachableTransportError,
-  isUnrecoverableSandboxError,
-  openDesktopBrowser,
-  openDesktopUrl,
-} from "./e2b-sandbox.js";
+import { e2bCreateOptions } from "./e2b-sandbox.js";
 
 describe("sandbox idle", () => {
   it("defaults to ten minutes when SANDBOX_IDLE_MS is unset", () => {
@@ -99,14 +95,15 @@ describe("sandbox idle", () => {
     expect(harness.sandbox.stop).toHaveBeenCalledOnce();
   });
 
-  it("rechecks the lease boundary after checkpointing before it suspends", async () => {
+  it("claims the lease boundary before any checkpoint export", async () => {
     const harness = idleHarness();
     harness.prisma.computer.updateMany.mockResolvedValueOnce({ count: 0 });
     harness.prisma.run.findFirst.mockResolvedValue(null);
 
     await sleepComputerIfIdle(harness.deps, harness.computer.id);
 
-    expect(harness.home.commit).toHaveBeenCalledOnce();
+    expect(harness.home.commit).not.toHaveBeenCalled();
+    expect(harness.sandbox.exportWorkspace).not.toHaveBeenCalled();
     expect(harness.sandbox.stop).not.toHaveBeenCalled();
     expect(harness.jobs.enqueue).toHaveBeenCalledOnce();
     expect(harness.prisma.computer.update).not.toHaveBeenCalled();
@@ -141,9 +138,17 @@ describe("sandbox idle", () => {
     await sleepComputerIfIdle(harness.deps, harness.computer.id);
 
     expect(harness.home.commit).toHaveBeenCalledOnce();
+    expect(harness.prisma.computer.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.sandbox.exportWorkspace.mock.invocationCallOrder[0]!,
+    );
     expect(harness.sandbox.stop).toHaveBeenCalledOnce();
     expect(harness.prisma.computer.update).toHaveBeenCalledWith({
-      where: { id: harness.computer.id },
+      where: {
+        id: harness.computer.id,
+        state: "suspending",
+        providerRef: harness.computer.providerRef,
+        updatedAt: expect.any(Date),
+      },
       data: {
         state: "suspended",
         controlHolder: "none",
@@ -169,6 +174,71 @@ describe("sandbox idle", () => {
     expect(harness.sandbox.stop).not.toHaveBeenCalled();
     expect(harness.prisma.computer.update).not.toHaveBeenCalled();
   });
+
+  it("retains the saved revision when the database transition after stopping fails", async () => {
+    const harness = idleHarness();
+    harness.prisma.computer.update.mockRejectedValueOnce(new Error("database unavailable"));
+    harness.sandbox.stop.mockImplementationOnce(async () => {
+      expect(harness.computer.homeRevision).toBe("rev-checkpoint");
+    });
+
+    await expect(sleepComputerIfIdle(harness.deps, harness.computer.id)).rejects.toThrow(
+      "database unavailable",
+    );
+
+    expect(harness.sandbox.stop).toHaveBeenCalledOnce();
+    expect(harness.computer.homeRevision).toBe("rev-checkpoint");
+  });
+
+  it.each(["failure", "lost claim"])(
+    "does not stop when recording the revision encounters a %s",
+    async (outcome) => {
+      const harness = idleHarness();
+      const updateMany = harness.prisma.computer.updateMany.getMockImplementation()!;
+      harness.prisma.computer.updateMany.mockImplementation(async (args) => {
+        if (args.data.homeRevision) {
+          if (outcome === "failure") throw new Error("database unavailable");
+          harness.computer.updatedAt = new Date(harness.computer.updatedAt.getTime() + 1);
+        }
+        return updateMany(args);
+      });
+
+      const sleep = sleepComputerIfIdle(harness.deps, harness.computer.id);
+      if (outcome === "failure") await expect(sleep).rejects.toThrow("database unavailable");
+      else await sleep;
+
+      expect(harness.sandbox.stop).not.toHaveBeenCalled();
+      expect(harness.computer.homeRevision).toBe("rev-before");
+      expect(harness.computer.state).toBe(outcome === "failure" ? "running" : "suspending");
+      expect(harness.jobs.enqueue).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["checkpoint failure", "stop failure", "stop success"])(
+    "preserves a newer lifecycle owner after %s",
+    async (stage) => {
+      const harness = idleHarness();
+      const invalidate = () => {
+        harness.computer.updatedAt = new Date(harness.computer.updatedAt.getTime() + 1);
+      };
+      if (stage === "checkpoint failure") {
+        harness.home.commit.mockImplementationOnce(async () => {
+          invalidate();
+          throw new Error("checkpoint interrupted");
+        });
+      } else {
+        harness.sandbox.stop.mockImplementationOnce(async () => {
+          invalidate();
+          if (stage === "stop failure") throw new Error("stop interrupted");
+        });
+      }
+
+      await expect(sleepComputerIfIdle(harness.deps, harness.computer.id)).rejects.toThrow();
+
+      expect(harness.computer.state).toBe("suspending");
+      expect(harness.events.append).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("background work launch and probe", () => {
@@ -191,7 +261,7 @@ describe("background work launch and probe", () => {
       const databaseId = "computer-db-id";
       const providerRef = "provider-ref";
       const launchId = "active";
-      markers.add(`/tmp/rakazo-background-${databaseId}-${launchId}`);
+      markers.add(`/tmp/rakazo-background-${databaseId}-run-1-${launchId}`);
 
       const launched = spawn(
         "bash",
@@ -200,6 +270,7 @@ describe("background work launch and probe", () => {
           BACKGROUND_WORK_LAUNCH,
           "rakazo-background-launch",
           databaseId,
+          "run-1",
           launchId,
           "exec sleep 30",
         ],
@@ -217,13 +288,21 @@ describe("background work launch and probe", () => {
     "cleans a completed marker without blocking a later launch",
     async () => {
       const markerId = "computer-relaunch-id";
-      const completedMarker = `/tmp/rakazo-background-${markerId}-completed`;
-      const activeMarker = `/tmp/rakazo-background-${markerId}-active`;
+      const completedMarker = `/tmp/rakazo-background-${markerId}-run-1-completed`;
+      const activeMarker = `/tmp/rakazo-background-${markerId}-run-1-active`;
       markers.add(completedMarker);
       markers.add(activeMarker);
       const completed = spawn(
         "bash",
-        ["-c", BACKGROUND_WORK_LAUNCH, "rakazo-background-launch", markerId, "completed", "true"],
+        [
+          "-c",
+          BACKGROUND_WORK_LAUNCH,
+          "rakazo-background-launch",
+          markerId,
+          "run-1",
+          "completed",
+          "true",
+        ],
         { stdio: "ignore" },
       );
       children.push(completed);
@@ -239,6 +318,7 @@ describe("background work launch and probe", () => {
           BACKGROUND_WORK_LAUNCH,
           "rakazo-background-launch",
           markerId,
+          "run-1",
           "active",
           "exec sleep 30",
         ],
@@ -253,7 +333,7 @@ describe("background work launch and probe", () => {
     "does not run the command when its marker cannot be opened",
     async () => {
       const markerId = "computer-marker-error";
-      const marker = `/tmp/rakazo-background-${markerId}-collision`;
+      const marker = `/tmp/rakazo-background-${markerId}-run-1-collision`;
       const commandRan = `/tmp/rakazo-background-command-ran-${markerId}`;
       markers.add(marker);
       markers.add(commandRan);
@@ -265,6 +345,7 @@ describe("background work launch and probe", () => {
           BACKGROUND_WORK_LAUNCH,
           "rakazo-background-launch",
           markerId,
+          "run-1",
           "collision",
           `touch ${commandRan}`,
         ],
@@ -281,7 +362,7 @@ describe("background work launch and probe", () => {
     "does not follow a pre-existing marker symlink",
     async () => {
       const markerId = "computer-marker-symlink";
-      const marker = `/tmp/rakazo-background-${markerId}-collision`;
+      const marker = `/tmp/rakazo-background-${markerId}-run-1-collision`;
       const commandRan = `/tmp/rakazo-background-command-ran-${markerId}`;
       markers.add(marker);
       markers.add(commandRan);
@@ -293,6 +374,7 @@ describe("background work launch and probe", () => {
           BACKGROUND_WORK_LAUNCH,
           "rakazo-background-launch",
           markerId,
+          "run-1",
           "collision",
           `touch ${commandRan}`,
         ],
@@ -304,6 +386,58 @@ describe("background work launch and probe", () => {
       expect(existsSync(commandRan)).toBe(false);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "cancel tears down background shell work for that run",
+    async () => {
+      const computerId = "computer-cancel-id";
+      const runId = "run-cancel-1";
+      const launchId = "active";
+      const marker = `/tmp/rakazo-background-${computerId}-${runId}-${launchId}`;
+      markers.add(marker);
+
+      const launched = spawn(
+        "bash",
+        [
+          "-c",
+          BACKGROUND_WORK_LAUNCH,
+          "rakazo-background-launch",
+          computerId,
+          runId,
+          launchId,
+          "exec sleep 30",
+        ],
+        { stdio: "ignore" },
+      );
+      children.push(launched);
+
+      await expect.poll(() => probeBackgroundWork(computerId)).toBe(0);
+
+      const launchedDone = processExit(launched);
+      const cancel = spawn(
+        "bash",
+        ["-c", CANCEL_COMPUTER_RUN_WORK, "rakazo-cancel-run-work", computerId, runId],
+        { stdio: "ignore" },
+      );
+      children.push(cancel);
+      expect(await processExit(cancel)).toBe(0);
+      await launchedDone;
+      expect(await probeBackgroundWork(computerId)).toBe(1);
+    },
+  );
+});
+
+describe("CANCEL_PRIMARY_BROWSER_WORK", () => {
+  it("targets the primary profile and matches browser argv0 only", () => {
+    expect(CANCEL_PRIMARY_BROWSER_WORK).toContain(".browser-profiles/chromium");
+    expect(CANCEL_PRIMARY_BROWSER_WORK).toContain("chromium-screen-");
+    expect(CANCEL_PRIMARY_BROWSER_WORK).toContain('argv0=""; IFS= read -r -d "" argv0');
+    expect(CANCEL_PRIMARY_BROWSER_WORK).toContain("*/chromium|*/chromium-*|chromium|chromium-*");
+    expect(CANCEL_PRIMARY_BROWSER_WORK).toContain("*/firefox|*/firefox-*|firefox|firefox-*");
+    expect(CANCEL_PRIMARY_BROWSER_WORK).not.toContain("*[c]hromium*");
+    expect(CANCEL_PRIMARY_BROWSER_WORK).not.toContain("*[f]irefox*");
+    expect(CANCEL_PRIMARY_BROWSER_WORK).not.toContain("*[g]oogle-chrome*");
+  });
 });
 
 describe("e2b create options", () => {
@@ -312,60 +446,6 @@ describe("e2b create options", () => {
     expect(opts.lifecycle).toEqual({ onTimeout: "pause", autoResume: false });
     expect(opts.timeoutMs).toBe(sandboxIdleMs());
     expect(opts.metadata.botId).toBe("bot-1");
-  });
-
-  it("only recreates when the sandbox is actually gone", () => {
-    expect(isUnrecoverableSandboxError(new Error("sandbox not found"))).toBe(true);
-    expect(isUnrecoverableSandboxError(new Error("ECONNRESET"))).toBe(false);
-    // Transient transport codes must not satisfy the replaceComputer predicate: otherwise
-    // update mode swallows a checkpoint blip, destroys the old box, and drops uncommitted work.
-    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
-    expect(isUnrecoverableSandboxError(reset)).toBe(false);
-    expect(isUnreachableTransportError(reset)).toBe(true);
-    expect(isUnrecoverableSandboxError(new Error("fetch failed"))).toBe(false);
-    expect(isUnreachableTransportError(new Error("fetch failed"))).toBe(true);
-  });
-
-  it("opens a browser on a new desktop", async () => {
-    const launched: string[] = [];
-    await openDesktopBrowser({
-      launch: async (application) => {
-        launched.push(application);
-        if (application !== "firefox") throw new Error("missing");
-      },
-      open: async () => {
-        throw new Error("should not fall back");
-      },
-    });
-    expect(launched).toEqual(["google-chrome", "firefox"]);
-  });
-
-  it("opens a URL through the named browser launcher", async () => {
-    const launched: string[] = [];
-    const commands = {
-      run: async (cmd: string) => {
-        launched.push(cmd);
-        if (cmd.includes("google-chrome")) throw new Error("missing");
-        if (cmd.includes("firefox")) return { exitCode: 0 };
-        throw new Error("missing");
-      },
-    };
-    await openDesktopUrl(
-      {
-        commands,
-        launch: async () => {
-          throw new Error("should use gtk-launch via commands");
-        },
-        open: async () => {
-          throw new Error("should not fall back");
-        },
-      },
-      "https://example.com/page",
-    );
-    expect(launched).toEqual([
-      "gtk-launch 'google-chrome' 'https://example.com/page'",
-      "gtk-launch 'firefox' 'https://example.com/page'",
-    ]);
   });
 });
 
@@ -382,6 +462,7 @@ function idleHarness(
   const computer = {
     id: "computer-id",
     homeKey: "team-workspace",
+    homeRevision: "rev-before",
     providerRef: "computer",
     kind: "e2b",
     state: "running",
@@ -394,16 +475,23 @@ function idleHarness(
     executionBotId: null,
     updatedAt: new Date("2026-01-01T00:00:00.000Z"),
   };
-  let checkpointedAt = computer.updatedAt;
   const prisma = {
     computer: {
-      findUnique: vi.fn(async () => ({ ...computer, updatedAt: checkpointedAt })),
+      findUnique: vi.fn(async () => ({ ...computer })),
       updateMany: vi.fn(async (args) => {
-        if (args.data.updatedAt) checkpointedAt = args.data.updatedAt;
+        if (args.where.updatedAt && args.where.updatedAt.getTime() !== computer.updatedAt.getTime())
+          return { count: 0 };
+        if (args.data.updatedAt) computer.updatedAt = args.data.updatedAt;
         if (args.data.state) computer.state = args.data.state;
+        if (args.data.homeRevision) computer.homeRevision = args.data.homeRevision;
         return { count: 1 };
       }),
-      update: vi.fn().mockResolvedValue(undefined),
+      update: vi.fn(async (args) => {
+        if (args.where.updatedAt && args.where.updatedAt.getTime() !== computer.updatedAt.getTime())
+          throw new Error("stale computer lifecycle");
+        Object.assign(computer, args.data);
+        return computer;
+      }),
     },
     run: { findFirst: vi.fn().mockResolvedValue(null) },
     agentHome: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },

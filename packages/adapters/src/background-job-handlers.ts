@@ -8,8 +8,12 @@ import type {
 } from "@rakazo/adapter-kit";
 import { messagingDeliverJob } from "@rakazo/adapter-kit";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
+import type { CloudAgentConnection } from "./cloud-agent-factory.js";
+import { pollCloudAgent } from "./cloud-agent-poll.js";
 import { expireComputerControl } from "./computer-control.js";
 import { scheduleComputerSleep, sleepComputerIfIdle } from "./computer-idle.js";
+import { performComputerUpdate } from "./computer-update.js";
 import type { createRunExecutor } from "./executor.js";
 import { compactHistory } from "./history-compaction.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
@@ -30,6 +34,7 @@ export function createBackgroundJobHandlers(deps: {
   memoryProviders: MemoryProviderResolver;
   deploymentModelKey?: string;
   messaging?: MessagingSurface;
+  cloudAgent?: CloudAgentConnection | null;
 }): BackgroundJobHandlers {
   const deliverMessaging = async (runId?: string) => {
     if (!deps.messaging) return;
@@ -57,7 +62,7 @@ export function createBackgroundJobHandlers(deps: {
           payload.runId,
         );
         await deps.jobs.enqueue(messagingDeliverJob()).catch(async (error) => {
-          console.error("messaging.deliver enqueue error", error);
+          getLogger().error("messaging.deliver enqueue error", error);
           await deliverMessaging();
         });
       }
@@ -67,6 +72,9 @@ export function createBackgroundJobHandlers(deps: {
     },
     "routine.wakeup": async (payload) => {
       await deps.executor.wakeRoutine(payload.routineId, payload.scheduledFor);
+    },
+    "computer.update": async ({ updateId }) => {
+      await performComputerUpdate(deps, updateId);
     },
     "computer.sleep": async (payload) => {
       await sleepComputerIfIdle(deps, payload.computerId);
@@ -78,6 +86,17 @@ export function createBackgroundJobHandlers(deps: {
     },
     "skill.teaching-expire": async (payload) => {
       await expireTaughtSkillTeaching(deps, payload.skillId);
+    },
+    "cloud_agent.poll": async (payload) => {
+      await pollCloudAgent(
+        {
+          prisma: deps.prisma,
+          jobs: deps.jobs,
+          events: deps.events,
+          cloudAgent: deps.cloudAgent,
+        },
+        payload,
+      );
     },
     "history.compact": async (payload) => {
       await compactHistory(

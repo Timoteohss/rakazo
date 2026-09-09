@@ -1,4 +1,8 @@
-import { resolveDeploymentModel, resolveSandboxProvider } from "@rakazo/adapters";
+import {
+  resolveCloudAgentProvider,
+  resolveDeploymentModel,
+  resolveSandboxProvider,
+} from "@rakazo/adapters";
 import {
   resolveAuthSecret,
   resolveEncryptionKey,
@@ -6,10 +10,11 @@ import {
   resolveSupervisorToken,
 } from "@rakazo/core";
 
-export { resolveSandboxProvider } from "@rakazo/adapters";
+export { resolveCloudAgentProvider, resolveSandboxProvider } from "@rakazo/adapters";
 
 export interface AppEnv {
   nodeEnv: string;
+  desktopStackToken?: string;
   databaseUrl: string;
   realtimeDatabaseUrl: string;
   authSecret: string;
@@ -21,10 +26,15 @@ export interface AppEnv {
   signupAllowlist: string | undefined;
   encryptionKey: string;
   dataDir: string;
+  /** Opt-in Pi JSONL session recording under DATA_DIR/pi-sessions. Default off. */
+  piSessionRecording: boolean;
   sandboxSupervisorUrl: string;
   sandboxSupervisorToken: string | undefined;
   screenProxySecret: string;
   sandboxProvider: string;
+  cloudAgentProvider: string;
+  cloudAgentSpaceId: string | undefined;
+  cursorApiKey: string | undefined;
   agentRuntime: string;
   deploymentModelKey: string | undefined;
   e2bApiKey: string | undefined;
@@ -34,6 +44,8 @@ export interface AppEnv {
   boxApiKey: string | undefined;
   boxApiUrl: string | undefined;
   composioApiKey: string | undefined;
+  /** Optional integrations.sh-compatible catalog base URL. */
+  integrationsCatalogUrl: string | undefined;
   pipedreamClientId: string | undefined;
   pipedreamClientSecret: string | undefined;
   pipedreamProjectId: string | undefined;
@@ -53,8 +65,18 @@ export interface AppEnv {
   whatsappVerifyToken: string | undefined;
   telegramBotToken: string | undefined;
   telegramWebhookSecret: string | undefined;
+  larkAppId: string | undefined;
+  larkAppSecret: string | undefined;
+  larkVerificationToken: string | undefined;
+  larkEncryptKey: string | undefined;
+  larkDomain: string | undefined;
   /** Unknown chat senders auto-provision their own accounts when true. */
   messagingOpenSignup: boolean;
+  /** Bot that owns team/external chat rooms on the messaging surface. */
+  teamChatBotId: string | undefined;
+  /** Optional model override for ambient engagement judging. */
+  teamChatJudgeProvider: string | undefined;
+  teamChatJudgeModel: string | undefined;
   defaultProvider: string;
   defaultModel: string;
   wakeupDriver: string;
@@ -73,6 +95,7 @@ export interface AppEnv {
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
   const authSecret = resolveAuthSecret(source);
   const sandboxProvider = resolveSandboxProvider(source);
+  const cloudAgentProvider = resolveCloudAgentProvider(source);
   const deploymentModel = resolveDeploymentModel(source);
   const updaterUrl = optional(source.RAKAZO_UPDATER_URL);
   const updaterToken = optional(source.RAKAZO_UPDATER_TOKEN);
@@ -80,6 +103,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     nodeEnv: source.NODE_ENV ?? "",
     databaseUrl: required(source, "DATABASE_URL"),
     realtimeDatabaseUrl: source.REALTIME_DATABASE_URL ?? required(source, "DATABASE_URL"),
+    desktopStackToken: optional(source.RAKAZO_DESKTOP_STACK_TOKEN),
     authSecret,
     authUrl: source.BETTER_AUTH_URL ?? source.WEB_ORIGIN ?? "http://127.0.0.1:5173",
     webOrigin: source.WEB_ORIGIN ?? "http://127.0.0.1:5173",
@@ -89,11 +113,15 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     signupAllowlist: source.SIGNUP_ALLOWLIST,
     encryptionKey: resolveEncryptionKey(source),
     dataDir: source.DATA_DIR ?? "./data",
+    piSessionRecording: source.PI_SESSION_RECORDING === "true",
     sandboxSupervisorUrl: source.SANDBOX_SUPERVISOR_URL ?? "http://127.0.0.1:7091",
     sandboxSupervisorToken:
       sandboxProvider === "docker" ? resolveSupervisorToken(source) : undefined,
     screenProxySecret: resolveScreenProxySecret(source),
     sandboxProvider,
+    cloudAgentProvider,
+    cloudAgentSpaceId: optional(source.CLOUD_AGENT_SPACE_ID),
+    cursorApiKey: optional(source.CURSOR_API_KEY),
     agentRuntime: source.AGENT_RUNTIME ?? "pi",
     // Provider, model and key resolve together: see resolveDeploymentModel.
     deploymentModelKey: deploymentModel.key,
@@ -104,6 +132,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     boxApiKey: source.BOX_API_KEY,
     boxApiUrl: source.BOX_API_URL ?? source.BOX_BASE_URL,
     composioApiKey: source.COMPOSIO_API_KEY,
+    integrationsCatalogUrl: optional(source.INTEGRATIONS_CATALOG_URL),
     pipedreamClientId: optional(source.PIPEDREAM_CLIENT_ID),
     pipedreamClientSecret: optional(source.PIPEDREAM_CLIENT_SECRET),
     pipedreamProjectId: optional(source.PIPEDREAM_PROJECT_ID),
@@ -124,7 +153,15 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     whatsappVerifyToken: optional(source.WHATSAPP_VERIFY_TOKEN),
     telegramBotToken: optional(source.TELEGRAM_BOT_TOKEN),
     telegramWebhookSecret: optional(source.TELEGRAM_WEBHOOK_SECRET_TOKEN),
+    larkAppId: optional(source.LARK_APP_ID),
+    larkAppSecret: optional(source.LARK_APP_SECRET),
+    larkVerificationToken: optional(source.LARK_VERIFICATION_TOKEN),
+    larkEncryptKey: optional(source.LARK_ENCRYPT_KEY),
+    larkDomain: optional(source.LARK_DOMAIN),
     messagingOpenSignup: source.MESSAGING_OPEN_SIGNUP === "true",
+    teamChatBotId: optional(source.TEAM_CHAT_BOT_ID) ?? optional(source.SLACK_RAKAZO_BOT_ID),
+    teamChatJudgeProvider: optional(source.TEAM_CHAT_JUDGE_PROVIDER),
+    teamChatJudgeModel: optional(source.TEAM_CHAT_JUDGE_MODEL),
     defaultProvider: deploymentModel.provider,
     defaultModel: deploymentModel.model,
     wakeupDriver: source.WAKEUP_DRIVER ?? "graphile",

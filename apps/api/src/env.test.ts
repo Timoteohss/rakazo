@@ -16,6 +16,13 @@ describe("loadEnv", () => {
     expect(env.nodeEnv).toBe("test");
   });
 
+  it("defaults Pi JSONL session recording to off", () => {
+    expect(loadEnv(base).piSessionRecording).toBe(false);
+    expect(loadEnv({ ...base, PI_SESSION_RECORDING: "false" }).piSessionRecording).toBe(false);
+    expect(loadEnv({ ...base, PI_SESSION_RECORDING: "1" }).piSessionRecording).toBe(false);
+    expect(loadEnv({ ...base, PI_SESSION_RECORDING: "true" }).piSessionRecording).toBe(true);
+  });
+
   it("keeps explicit emulator settings for pnpm test", () => {
     const env = loadEnv({
       ...base,
@@ -26,6 +33,14 @@ describe("loadEnv", () => {
     expect(env.agentRuntime).toBe("scripted");
     expect(env.sandboxProvider).toBe("fake");
     expect(env.wakeupDriver).toBe("memory");
+  });
+
+  it("loads an optional integrations catalog mirror", () => {
+    expect(loadEnv(base).integrationsCatalogUrl).toBeUndefined();
+    expect(
+      loadEnv({ ...base, INTEGRATIONS_CATALOG_URL: " https://catalog.example.test/feed " })
+        .integrationsCatalogUrl,
+    ).toBe("https://catalog.example.test/feed");
   });
 
   it("falls back to none when a remote provider key is missing", () => {

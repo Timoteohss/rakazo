@@ -1,8 +1,11 @@
+import { Domain } from "chat-adapter-lark";
 import { describe, expect, it, vi } from "vitest";
 import {
+  enrichSlackTeamRoom,
   isMessagingEnabled,
   isMessagingSurfaceEnabled,
   type MessagingEnvironmentValues,
+  messagingEnvFromProcess,
   messagingPlatformsFromEnv,
   parseSendblueStatus,
 } from "./messaging-platforms.js";
@@ -21,6 +24,9 @@ const fullEnv: MessagingEnvironmentValues = {
   whatsappVerifyToken: "wa-verify",
   telegramBotToken: "tg-token",
   telegramWebhookSecret: "tg-webhook-secret",
+  larkAppId: "cli-fake",
+  larkAppSecret: "lark-secret",
+  larkVerificationToken: "lark-verify",
 };
 
 function providers(env: MessagingEnvironmentValues): string[] {
@@ -30,7 +36,7 @@ function providers(env: MessagingEnvironmentValues): string[] {
 describe("messagingPlatformsFromEnv", () => {
   it("mounts nothing without credentials and everything with full credentials", () => {
     expect(providers({})).toEqual([]);
-    expect(providers(fullEnv)).toEqual(["sendblue", "slack", "whatsapp", "telegram"]);
+    expect(providers(fullEnv)).toEqual(["sendblue", "slack", "whatsapp", "telegram", "lark"]);
   });
 
   it("requires all four sendblue values", () => {
@@ -63,6 +69,19 @@ describe("messagingPlatformsFromEnv", () => {
     expect(
       providers({ telegramBotToken: "tg-token", telegramWebhookSecret: "tg-webhook-secret" }),
     ).toEqual(["telegram"]);
+    expect(providers({ ...fullEnv, larkAppId: undefined })).not.toContain("lark");
+    expect(providers({ ...fullEnv, larkAppSecret: undefined })).not.toContain("lark");
+    // Without the verification token the adapter would accept unsigned
+    // webhook posts, so the token is a mount gate, not optional hardening.
+    expect(providers({ ...fullEnv, larkVerificationToken: undefined })).not.toContain("lark");
+    expect(providers({ larkAppId: "cli-fake", larkAppSecret: "lark-secret" })).toEqual([]);
+    expect(
+      providers({
+        larkAppId: "cli-fake",
+        larkAppSecret: "lark-secret",
+        larkVerificationToken: "lark-verify",
+      }),
+    ).toEqual(["lark"]);
   });
 
   it("forces Telegram into webhook mode so worker initialize cannot long-poll", () => {
@@ -74,15 +93,79 @@ describe("messagingPlatformsFromEnv", () => {
     expect((telegram.adapter as unknown as { mode: string }).mode).toBe("webhook");
   });
 
+  it("forces Lark into webhook inbound so worker initialize cannot open a long connection", () => {
+    const lark = messagingPlatformsFromEnv({
+      larkAppId: "cli-fake",
+      larkAppSecret: "lark-secret",
+      larkVerificationToken: "lark-verify",
+    })[0]!;
+    const incoming = lark.adapter as unknown as {
+      incomingConfig: { events: string; callbacks: string };
+      shouldStartWsClient: () => boolean;
+    };
+    expect(incoming.incomingConfig).toEqual({ events: "webhook", callbacks: "webhook" });
+    expect(incoming.shouldStartWsClient()).toBe(false);
+  });
+
+  it("maps LARK_* process env and accepts the international domain switch", () => {
+    expect(
+      messagingEnvFromProcess({
+        LARK_APP_ID: " cli-fake ",
+        LARK_APP_SECRET: " lark-secret ",
+        LARK_VERIFICATION_TOKEN: " lark-verify ",
+        LARK_ENCRYPT_KEY: " lark-encrypt ",
+        LARK_DOMAIN: " Lark ",
+      }),
+    ).toMatchObject({
+      larkAppId: "cli-fake",
+      larkAppSecret: "lark-secret",
+      larkVerificationToken: "lark-verify",
+      larkEncryptKey: "lark-encrypt",
+      larkDomain: "Lark",
+    });
+    const international = messagingPlatformsFromEnv({
+      larkAppId: "cli-fake",
+      larkAppSecret: "lark-secret",
+      larkVerificationToken: "lark-verify",
+      larkDomain: "Lark",
+    })[0]!;
+    expect((international.adapter as unknown as { config: { domain: Domain } }).config.domain).toBe(
+      Domain.Lark,
+    );
+  });
+
+  it.each(["", "unknown", "feishu"])("uses normalized Lark defaults for domain %s", (domain) => {
+    vi.stubEnv("LARK_DOMAIN", domain);
+    vi.stubEnv("LARK_ENCRYPT_KEY", "   ");
+    try {
+      const lark = messagingPlatformsFromEnv({
+        ...messagingEnvFromProcess(process.env),
+        larkAppId: "cli-fake",
+        larkAppSecret: "lark-secret",
+        larkVerificationToken: "lark-verify",
+      }).find((platform) => platform.provider === "lark")!;
+      const config = (
+        lark.adapter as unknown as {
+          config: { domain: Domain; encryptKey: string };
+        }
+      ).config;
+      expect(config.domain).toBe(Domain.Feishu);
+      expect(config.encryptKey).toBe("");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("declares group and typing support only for sendblue", () => {
     const platforms = messagingPlatformsFromEnv(fullEnv);
     const capabilities = Object.fromEntries(
       platforms.map((platform) => [platform.provider, platform.capabilities]),
     );
     expect(capabilities.sendblue).toEqual({ direct: true, groups: true, typing: true });
-    expect(capabilities.slack).toEqual({ direct: true, groups: false, typing: false });
+    expect(capabilities.slack).toEqual({ direct: true, groups: true, typing: false });
     expect(capabilities.whatsapp).toEqual({ direct: true, groups: false, typing: false });
     expect(capabilities.telegram).toEqual({ direct: true, groups: false, typing: false });
+    expect(capabilities.lark).toEqual({ direct: true, groups: false, typing: false });
   });
 });
 
@@ -104,6 +187,15 @@ describe("sendblue platform hooks", () => {
     expect(sendblue.channelName!({ group_display_name: "" })).toBeNull();
     expect(sendblue.channelName!({})).toBeNull();
     expect(sendblue.channelName!(null)).toBeNull();
+  });
+
+  it("accepts only supported per-message transports", () => {
+    for (const service of ["iMessage", "SMS", "RCS"]) {
+      expect(sendblue.transport!({ service })).toBe(service);
+    }
+    expect(sendblue.transport!({ service: "email" })).toBeNull();
+    expect(sendblue.transport!({ service: 42 })).toBeNull();
+    expect(sendblue.transport!(null)).toBeNull();
   });
 
   it("derives deterministic provider-prefixed direct thread ids", () => {
@@ -155,6 +247,12 @@ describe("isMessagingEnabled", () => {
     expect(process.env.VITEST).toBeTruthy();
     expect(isMessagingEnabled(messagingPlatformsFromEnv(fullEnv))).toBe(false);
   });
+
+  it.each(["0", "false"])("does not treat VITEST=%s as an active test runner", (value) => {
+    vi.stubEnv("VITEST", value);
+    expect(isMessagingEnabled(messagingPlatformsFromEnv(fullEnv))).toBe(true);
+    vi.unstubAllEnvs();
+  });
 });
 
 describe("isMessagingSurfaceEnabled", () => {
@@ -172,5 +270,69 @@ describe("isMessagingSurfaceEnabled", () => {
     expect(isMessagingSurfaceEnabled(platforms, key(undefined, false))).toBe(true);
     expect(isMessagingSurfaceEnabled([], key("model-key", true))).toBe(false);
     vi.unstubAllEnvs();
+  });
+});
+
+describe("enrichSlackTeamRoom", () => {
+  const base = {
+    type: "message" as const,
+    provider: "slack",
+    handle: "Ev1",
+    threadId: "slack:C1",
+    isDirect: false,
+    from: "U_OTHER",
+    fromLabel: "Ada",
+    channelName: "launch",
+    participants: ["U_OTHER"],
+    content: "hello <@U_SOMEONE>",
+    mediaUrl: null,
+  };
+
+  it("marks app_mention events as mention", () => {
+    const enrichment = enrichSlackTeamRoom(
+      {
+        team_id: "T1",
+        authorizations: [{ user_id: "U_BOT", is_bot: true }],
+        event: { type: "app_mention", channel: "C1", text: "<@U_BOT> ship it", user: "U_OTHER" },
+      },
+      base,
+    );
+    expect(enrichment.kind).toBe("mention");
+    expect(enrichment.workspaceId).toBe("T1");
+    expect(enrichment.conversationKey).toBe("C1");
+  });
+
+  it("keeps ambient when another user is mentioned, not the bot", () => {
+    const enrichment = enrichSlackTeamRoom(
+      {
+        team_id: "T1",
+        authorizations: [{ user_id: "U_BOT", is_bot: true }],
+        event: {
+          type: "message",
+          channel: "C1",
+          text: "hey <@U_SOMEONE> can you look?",
+          user: "U_OTHER",
+        },
+      },
+      base,
+    );
+    expect(enrichment.kind).toBe("ambient");
+  });
+
+  it("marks message events that mention the authorized bot as mention", () => {
+    const enrichment = enrichSlackTeamRoom(
+      {
+        team_id: "T1",
+        authorizations: [{ user_id: "U_BOT", is_bot: true }],
+        event: {
+          type: "message",
+          channel: "C1",
+          text: "hey <@U_BOT> ship Friday?",
+          user: "U_OTHER",
+        },
+      },
+      base,
+    );
+    expect(enrichment.kind).toBe("mention");
   });
 });

@@ -4,6 +4,8 @@ import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachment
 import {
   ActionApprovalRuleSchema,
   ActionAutoReviewSettingsSchema,
+  AgentSecretInputSchema,
+  AgentSecretSchema,
   AgentSkillCatalogEntrySchema,
   AgentSkillSchema,
   AppBootstrapSchema,
@@ -17,6 +19,7 @@ import {
   ComputerModeSchema,
   ComputerReleaseReasonSchema,
   ComputerStatusSchema,
+  ComputerUpdateSchema,
   ConnectionCatalogItemSchema,
   ConnectionSchema,
   CreateAgentSkillInput,
@@ -26,8 +29,10 @@ import {
   CreateScratchpadItemInput,
   DeploymentSettingsSchema,
   ExportManifestSchema,
+  ExternalConversationPolicySchema,
   GroupDetailSchema,
   GroupSchema,
+  IntegrationCatalogResultSchema,
   McpServerConfigInput,
   McpServerSchema,
   MemoryDocumentSchema,
@@ -59,6 +64,7 @@ import {
   ThreadSnapshotSchema,
   UpdateAgentSkillInput,
   UpdateBotInput,
+  UpdateExternalConversationPolicyInput,
   UpdateGroupInput,
   UsageRecordSchema,
   VoiceCatalogEntrySchema,
@@ -68,6 +74,11 @@ import {
 } from "./domain.js";
 import { ProductEventSchema } from "./events.js";
 import { Id, IsoDate } from "./ids.js";
+import {
+  IntegrationProviderConfigSchema,
+  IntegrationSetupStateSchema,
+} from "./integration-settings.js";
+import { MessageReactionSchema } from "./reactions.js";
 import { RunsListOutputSchema } from "./runs.js";
 import { SearchQueryOutputSchema } from "./search.js";
 
@@ -131,6 +142,9 @@ export const appContract = {
   spaces: {
     list: oc.output(SpaceNavigationSchema),
     create: oc.input(z.object({ name: z.string().trim().min(1).max(60) })).output(SpaceSchema),
+    remove: oc
+      .input(z.object({ spaceId: Id }))
+      .output(z.object({ ok: z.literal(true), activeSpaceId: Id })),
   },
   bootstrap: oc.input(z.object({ botId: Id.optional() })).output(AppBootstrapSchema),
   deployment: {
@@ -273,7 +287,8 @@ export const appContract = {
       .input(
         threadTarget.safeExtend({
           messageId: Id,
-          thumbsUp: z.boolean(),
+          reaction: MessageReactionSchema,
+          clientNonce: z.string().min(1).max(200),
         }),
       )
       .output(z.object({ ok: z.literal(true) })),
@@ -298,9 +313,14 @@ export const appContract = {
     status: oc.input(botId).output(ComputerStatusSchema),
     boot: oc.input(botId).output(ComputerStatusSchema),
     stop: oc.input(botId).output(ComputerStatusSchema),
-    recover: oc.input(botId).output(ComputerStatusSchema),
+    recover: oc.input(botId).output(ComputerUpdateSchema),
     reset: oc.input(botId).output(ComputerStatusSchema),
-    update: oc.input(botId).output(ComputerStatusSchema),
+    update: oc.input(botId).output(ComputerUpdateSchema),
+    updates: oc.output(z.array(ComputerUpdateSchema)),
+    releaseInterrupted: oc
+      .input(z.object({ id: Id, workersStopped: z.literal(true) }))
+      .output(z.object({ ok: z.literal(true) })),
+    dismissUpdate: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
     takeover: oc.input(botId).output(z.object({ leaseId: Id, expiresAt: z.string() })),
     release: oc
       .input(
@@ -369,14 +389,28 @@ export const appContract = {
             active: z.boolean().optional(),
             notify: z.boolean().optional(),
             webhookEnabled: z.boolean().optional(),
+            githubEnabled: z.boolean().optional(),
+            messageProvider: z
+              .string()
+              .min(1)
+              .max(50)
+              .regex(/^[a-z0-9._-]+$/i)
+              .nullable()
+              .optional(),
             /** ISO datetime to arm a never-run one-shot. */
             runAt: IsoDate.optional(),
           })
           .superRefine((value, ctx) => {
-            if (value.crons && value.crons.length === 0 && value.webhookEnabled === false) {
+            if (
+              value.crons &&
+              value.crons.length === 0 &&
+              value.webhookEnabled === false &&
+              value.githubEnabled === false &&
+              value.messageProvider === null
+            ) {
               ctx.addIssue({
                 code: "custom",
-                message: "Add a schedule or webhook trigger",
+                message: "Add a schedule, webhook, GitHub, or message trigger",
                 path: ["crons"],
               });
             }
@@ -468,10 +502,23 @@ export const appContract = {
   },
   capabilities: {
     list: oc.output(z.array(CapabilityInstallSchema)),
+    catalogSearch: oc
+      .input(
+        z.object({
+          query: z.string().trim().max(253).default(""),
+          usePublicCatalog: z.boolean().default(false),
+        }),
+      )
+      .output(
+        z.object({
+          enabled: z.boolean(),
+          results: z.array(IntegrationCatalogResultSchema),
+        }),
+      ),
     install: oc
       .input(
         z.object({
-          kind: z.enum(["skill", "plugin", "mcp", "api"]),
+          kind: z.enum(["skill", "plugin", "mcp", "api", "graphql"]),
           name: z.string().min(1).max(120),
           source: z.string().min(1).max(2048),
           config: z.record(z.string(), z.unknown()).default({}),
@@ -485,7 +532,14 @@ export const appContract = {
     servers: {
       list: oc.output(z.array(McpServerSchema)),
       create: oc.input(McpServerConfigInput).output(McpServerSchema),
-      update: oc.input(z.object({ id: Id, config: McpServerConfigInput })).output(McpServerSchema),
+      update: oc
+        .input(
+          z.union([
+            z.object({ id: Id, config: McpServerConfigInput }),
+            z.object({ id: Id, secret: z.string().min(1).max(16384) }),
+          ]),
+        )
+        .output(McpServerSchema),
       remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
     },
     assignments: {
@@ -527,16 +581,26 @@ export const appContract = {
     },
   },
   onboarding: {
-    /** Seed the first-run conversational onboarding into the bot's thread. */
+    /** Seed the first-run greeting into the bot's thread (focus card is separate). */
     start: oc.input(z.object({ botId: Id })).output(z.object({ ok: z.literal(true) })),
-    /** Answer the focus choice; renames the bot and posts the app cards. */
+    /** Post the focus choice card when the thread is still idle. */
+    promptFocus: oc.input(z.object({ botId: Id })).output(z.object({ ok: z.literal(true) })),
+    /** Answer the focus choice; posts the app cards. Does not rename the bot. */
     choose: oc
       .input(z.object({ botId: Id, optionId: z.string() }))
       .output(z.object({ ok: z.literal(true) })),
+    /** Dismiss the unanswered focus card without choosing an option. */
+    dismissFocus: oc.input(z.object({ botId: Id })).output(z.object({ ok: z.literal(true) })),
     /** Flip an app_connect card to connected after authorization completes. */
     appConnected: oc
-      .input(z.object({ botId: Id, provider: z.string() }))
+      .input(
+        z.object({ botId: Id, provider: z.string(), connectorId: z.string().default("composio") }),
+      )
       .output(z.object({ ok: z.literal(true) })),
+  },
+  integrationSetup: {
+    get: oc.output(IntegrationSetupStateSchema),
+    save: oc.input(IntegrationProviderConfigSchema).output(z.object({ ok: z.literal(true) })),
   },
   connections: {
     catalog: oc
@@ -555,7 +619,19 @@ export const appContract = {
     complete: oc
       .input(z.object({ connectionId: Id, code: z.string().optional() }))
       .output(ConnectionSchema),
+    rename: oc
+      .input(z.object({ connectionId: Id, displayName: z.string().trim().min(1).max(80) }))
+      .output(ConnectionSchema),
     revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
+    /** Tools the connected provider exposes. Read-only; no per-tool allowlist yet. */
+    tools: oc.input(z.object({ connectorId: z.string(), provider: z.string() })).output(
+      z.array(
+        z.object({
+          name: z.string(),
+          description: z.string(),
+        }),
+      ),
+    ),
   },
   /** External messaging surface: link state, group channels, agent connections. */
   messaging: {
@@ -674,6 +750,16 @@ export const appContract = {
         }),
       )
       .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
+  },
+  externalConversations: {
+    updatePolicy: oc
+      .input(UpdateExternalConversationPolicyInput)
+      .output(ExternalConversationPolicySchema),
+  },
+  agentSecrets: {
+    list: oc.output(z.array(AgentSecretSchema)),
+    put: oc.input(AgentSecretInputSchema).output(AgentSecretSchema),
+    remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
   },
 };
 

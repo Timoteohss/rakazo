@@ -7,6 +7,18 @@ import type {
   ArtifactPut,
   BackgroundJob,
   BackgroundJobHandlers,
+  BrowserActRequest,
+  BrowserActResult,
+  BrowserCapabilities,
+  BrowserNavigateRequest,
+  BrowserNavigateResult,
+  BrowserSnapshotRequest,
+  BrowserSnapshotResult,
+  CloudAgentCapabilities,
+  CloudAgentHandle,
+  CloudAgentLaunchRequest,
+  CloudAgentReplyRequest,
+  CloudAgentSnapshot,
   CommandRequest,
   ComputerActionRequest,
   ComputerActionResult,
@@ -33,6 +45,8 @@ import type {
   MessagingSendRequest,
   MessagingSendResult,
   NotificationMessage,
+  PageBrowserCommand,
+  PageBrowserResult,
   PortableFile,
   ProcessEvent,
   SandboxCapabilities,
@@ -63,6 +77,12 @@ import type {
 
 export interface SandboxProvider {
   describe(): AdapterDescriptor<SandboxCapabilities>;
+  /** Optional live browser on the same leased screen as observe/act. */
+  pageBrowser?(
+    computer: ComputerRef,
+    request: PageBrowserCommand,
+    context: AdapterContext,
+  ): Promise<PageBrowserResult>;
   /** Allocate or reconnect the computer, returning its reference before fallible setup. */
   provision(
     request: {
@@ -323,6 +343,20 @@ export interface MessagingSurface {
    * message delivery, and silently no-ops on platforms without support.
    */
   sendTyping(threadId: string, context: AdapterContext): Promise<void>;
+  /**
+   * Start the surface eagerly instead of waiting for the first inbound
+   * webhook or outbound send to touch it. Needed for adapters that pull
+   * updates themselves (e.g. Telegram in "auto"/"polling" mode, used when
+   * no public webhook URL is reachable): without an explicit call here,
+   * nothing kicks off that pull loop until something else happens to
+   * initialize the adapter first.
+   */
+  initialize?(): Promise<void>;
+  /**
+   * Release long-lived inbound resources (Telegram getUpdates polling) so a
+   * replacement process can claim them. No-op when the surface never started.
+   */
+  shutdown?(): Promise<void>;
 }
 
 /**
@@ -347,4 +381,47 @@ export interface WebFetchProvider {
 /** Convenience when one adapter owns both search and fetch. */
 export interface WebProvider extends WebSearchProvider, WebFetchProvider {
   describe(): AdapterDescriptor<WebSearchCapabilities & WebFetchCapabilities>;
+}
+
+/**
+ * Provider-neutral page browser on the bot computer. Builtin browser_* tools
+ * route here so backends (in-process page session, CDP against the computer's
+ * Chrome, future adapters) can swap without changing tool names. Not a second
+ * hosted browser product. Prefer this for web pages; use computer_act when the
+ * page tool cannot operate or the task needs the desktop itself.
+ */
+export interface BrowserProvider {
+  describe(): AdapterDescriptor<BrowserCapabilities>;
+  navigate(
+    computer: ComputerRef,
+    request: BrowserNavigateRequest,
+    context: AdapterContext,
+  ): Promise<BrowserNavigateResult>;
+  snapshot(
+    computer: ComputerRef,
+    request: BrowserSnapshotRequest,
+    context: AdapterContext,
+  ): Promise<BrowserSnapshotResult>;
+  act(
+    computer: ComputerRef,
+    request: BrowserActRequest,
+    context: AdapterContext,
+  ): Promise<BrowserActResult>;
+}
+
+/**
+ * Provider-neutral remote cloud coding agents (clone a repo on a vendor VM,
+ * open a PR). Not the bot computer — shell/sandbox stays separate. Core runs
+ * with none configured; tools are injected only when a provider is present.
+ */
+export interface CloudAgentProvider {
+  describe(): AdapterDescriptor<CloudAgentCapabilities>;
+  launch(request: CloudAgentLaunchRequest, context: AdapterContext): Promise<CloudAgentHandle>;
+  get(id: string, context: AdapterContext, runId?: string): Promise<CloudAgentSnapshot>;
+  reply(
+    id: string,
+    request: CloudAgentReplyRequest,
+    context: AdapterContext,
+  ): Promise<CloudAgentHandle>;
+  cancel(id: string, context: AdapterContext, runId?: string): Promise<CloudAgentSnapshot>;
 }
